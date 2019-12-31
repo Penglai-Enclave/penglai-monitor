@@ -268,13 +268,16 @@ void spmp_inst_trap(uintptr_t* regs, uintptr_t mcause, uintptr_t mepc)
 #ifdef SPMP_ENABLED
   if(read_spmpexpt(spmpexpt))
   {
-    printm("M mode: inst_page_fault, badaddr: 0x%lx, badepc: 0x%lx\r\n", read_csr(mbadaddr), read_csr(mepc));
+    //TODO: deal with spmp trap
+    printm("M mode: spmp_inst_trap, badaddr: 0x%lx, badepc: 0x%lx\r\n", read_csr(mbadaddr), read_csr(mepc));
     set_spmpexpt(spmpexpt, 0);
-    return;
+    bad_trap(regs, mcause, mepc);
   }
 #endif /* SPMP_ENABLED */
 
-  printm("M mode: spmp_inst_trap, badaddr: 0x%lx, badepc: 0x%lx\r\n", read_csr(mbadaddr), read_csr(mepc));
+  //TODO: deal with enclave page fault
+  printm("M mode: inst_page_fault, badaddr: 0x%lx, badepc: 0x%lx\r\n", read_csr(mbadaddr), read_csr(mepc));
+  bad_trap(regs, mcause, mepc);
 }
 
 void spmp_load_trap(uintptr_t* regs, uintptr_t mcause, uintptr_t mepc)
@@ -285,13 +288,17 @@ void spmp_load_trap(uintptr_t* regs, uintptr_t mcause, uintptr_t mepc)
 #ifdef SPMP_ENABLED
   if(read_spmpexpt(spmpexpt))
   {
-    printm("M mode: load_page_fault, badaddr: 0x%lx, badepc: 0x%lx\r\n", read_csr(mbadaddr), read_csr(mepc));
+    //TODO: deal with spmp trap
+    printm("M mode: spmp_load_trap, badaddr: 0x%lx, badepc: 0x%lx\r\n", read_csr(mbadaddr), read_csr(mepc));
     set_spmpexpt(spmpexpt, 0);
-    return;
+    bad_trap(regs, mcause, mepc);
   }
 #endif /* SPMP_ENABLED */
 
-  printm("M mode: spmp_load_trap, badaddr: 0x%lx, badepc: 0x%lx\r\n", read_csr(mbadaddr), read_csr(mepc));
+
+  //TODO: deal with enclave page fault
+  printm("M mode: load_page_fault, badaddr: 0x%lx, badepc: 0x%lx\r\n", read_csr(mbadaddr), read_csr(mepc));
+  bad_trap(regs, mcause, mepc);
 }
 
 void spmp_store_trap(uintptr_t* regs, uintptr_t mcause, uintptr_t mepc)
@@ -302,13 +309,16 @@ void spmp_store_trap(uintptr_t* regs, uintptr_t mcause, uintptr_t mepc)
 #ifdef SPMP_ENABLED
   if(read_spmpexpt(spmpexpt))
   {
-    printm("M mode: store_page_fault, badaddr: 0x%lx, badepc: 0x%lx\r\n", read_csr(mbadaddr), read_csr(mepc));
+    //TODO: deal with spmp trap
+    printm("M mode: spmp_store_trap, badaddr: 0x%lx, badepc: 0x%lx\r\n", read_csr(mbadaddr), read_csr(mepc));
     set_spmpexpt(spmpexpt, 0);
-    return;
+    bad_trap(regs, mcause, mepc);
   }
 #endif /* SPMP_ENABLED */
 
-  printm("M mode: spmp_store_trap, badaddr: 0x%lx, badepc: 0x%lx\r\n", read_csr(mbadaddr), read_csr(mepc));
+  //TODO: deal with enclave page fault
+  printm("M mode: store_page_fault, badaddr: 0x%lx, badepc: 0x%lx\r\n", read_csr(mbadaddr), read_csr(mepc));
+  bad_trap(regs, mcause, mepc);
 }
 #endif /* SM_ENABLED */
 

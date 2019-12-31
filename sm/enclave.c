@@ -445,7 +445,8 @@ uintptr_t run_enclave(uintptr_t* regs, unsigned int eid)
   write_csr(mepc, (uintptr_t)(enclave->entry_point));
 
   //TODO: enable timer interrupt
-  set_csr(mie, MIP_MTIP);
+  //FIXME: bug in timer interrupt
+  //set_csr(mie, MIP_MTIP);
 
   //set default stack
   regs[2] = ENCLAVE_DEFAULT_STACK;
