@@ -445,8 +445,7 @@ uintptr_t run_enclave(uintptr_t* regs, unsigned int eid)
   write_csr(mepc, (uintptr_t)(enclave->entry_point));
 
   //TODO: enable timer interrupt
-  //FIXME: bug in timer interrupt
-  //set_csr(mie, MIP_MTIP);
+  set_csr(mie, MIP_MTIP);
 
   //set default stack
   regs[2] = ENCLAVE_DEFAULT_STACK;
@@ -570,7 +569,13 @@ uintptr_t resume_enclave(uintptr_t* regs, unsigned int eid)
     retval = -1UL;
     goto resume_enclave_out;
   }
+
   enclave->state = RUNNING;
+
+  //regs[10] will be set to retval when mcall_trap return, so we have to
+  //set retval to be regs[10] here to succuessfully restore context
+  //TODO: retval should be set to indicate success or fail when resume from ocall
+  retval = regs[10];
 
 resume_enclave_out:
   spinlock_unlock(&enclave_metadata_lock);

@@ -133,7 +133,7 @@ uintptr_t sm_resume_enclave(uintptr_t* regs, unsigned long eid)
       retval = resume_enclave(regs, eid);
       break;
     case RESUME_FROM_STOP:
-      printm("resume from stop\r\n");
+      //printm("resume from stop\r\n");
       retval = resume_from_stop(regs, eid);
       break;
     default:
