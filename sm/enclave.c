@@ -661,3 +661,10 @@ timer_irq_out:
   spinlock_unlock(&enclave_metadata_lock);
   return retval;
 }
+
+uintptr_t call_enclave(uintptr_t* regs, unsigned int callee_eid, uintptr_t arg)
+{
+  uintptr_t ret = 0;
+  printm("M MODE: call encalve success\r\n");
+  return ret;
+}

@@ -3,6 +3,7 @@
 #include "pmp.h"
 #include "enclave.h"
 #include "math.h"
+#include "server_enclave.h"
 
 static int sm_initialized = 0;
 static spinlock_t sm_init_lock = SPINLOCK_INIT;
@@ -159,4 +160,22 @@ uintptr_t sm_do_timer_irq(uintptr_t *regs, uintptr_t mcause, uintptr_t mepc)
   ret = do_timer_irq(regs, mcause, mepc);
 
   return ret;
+}
+
+uintptr_t sm_server_enclave_acquire(uintptr_t *regs, uintptr_t server_name)
+{
+  uintptr_t ret = 0;
+
+  ret = acquire_server_enclave(regs, (char*)server_name);
+
+  return ret;
+}
+
+uintptr_t sm_call_enclave(uintptr_t* regs, uintptr_t eid, uintptr_t arg)
+{
+  uintptr_t retval = 0;
+
+  retval = call_enclave(regs, (unsigned int)eid, arg);
+
+  return retval;
 }

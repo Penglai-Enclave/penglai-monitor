@@ -91,4 +91,15 @@ uintptr_t resume_from_stop(uintptr_t* regs, unsigned int eid);
 uintptr_t exit_enclave(uintptr_t* regs, unsigned long retval);
 uintptr_t do_timer_irq(uintptr_t* regs, uintptr_t mcause, uintptr_t mepc);
 
+struct call_enclave_arg_t
+{
+    uintptr_t req_arg;
+    uintptr_t req_vaddr;
+    uintptr_t req_size;
+    uintptr_t resp_val;
+    uintptr_t resp_vaddr;
+    uintptr_t resp_size;
+};
+uintptr_t call_enclave(uintptr_t *regs, unsigned int enclave_id, uintptr_t arg);
+
 #endif /* _ENCLAVE_H */
