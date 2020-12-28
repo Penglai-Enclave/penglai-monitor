@@ -179,3 +179,12 @@ uintptr_t sm_call_enclave(uintptr_t* regs, uintptr_t eid, uintptr_t arg)
 
   return retval;
 }
+
+uintptr_t sm_enclave_return(uintptr_t* regs, uintptr_t arg)
+{
+  uintptr_t ret = 0;
+
+  ret = enclave_return(regs, arg);
+
+  return ret;
+}

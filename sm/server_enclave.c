@@ -10,6 +10,6 @@
 uintptr_t acquire_server_enclave(uintptr_t *regs, char* server_name_u)
 {
     uintptr_t ret = 0;
-    printm("M MODE: acquire encalve success\r\n");
+    printm("M mode: acquire encalve success\r\n");
     return ret;
 }

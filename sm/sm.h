@@ -29,6 +29,7 @@
 #define SBI_DEBUG_PRINT         88
 #define SBI_ACQUIRE_SERVER      87
 #define SBI_CALL_ENCLAVE        86
+#define SBI_ENCLAVE_RETURN      85
 
 //Error code of SBI_ALLOC_ENCLAVE_MEM
 #define ENCLAVE_NO_MEMORY       -2
@@ -73,5 +74,7 @@ int check_in_enclave_world();
 uintptr_t sm_server_enclave_acquire(uintptr_t *regs, uintptr_t server_name);
 
 uintptr_t sm_call_enclave(uintptr_t *regs, uintptr_t enclave_id, uintptr_t arg);
+
+uintptr_t sm_enclave_return(uintptr_t *regs, uintptr_t arg);
 
 #endif /* _SM_H */

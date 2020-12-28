@@ -207,6 +207,9 @@ send_ipi:
     case SBI_CALL_ENCLAVE:
       retval = sm_call_enclave(regs, arg0, arg1);
       break;
+    case SBI_ENCLAVE_RETURN:
+      retval = sm_enclave_return(regs, arg0);
+      break;
     //TODO: delete this SBI_CALL
     case SBI_DEBUG_PRINT:
       printm("SBI_DEBUG_PRINT\r\n");

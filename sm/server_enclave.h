@@ -6,7 +6,7 @@
 
 struct server_enclave_t
 {
-    char server_name[16];
+    char server_name[NAME_LEN];
     struct enclave_t* entity;
 };
 

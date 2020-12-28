@@ -28,4 +28,6 @@ struct enclave_sbi_param_t
   unsigned long *ecall_arg3;
 };
 
+#define NAME_LEN  16
+
 #endif /* _ENCLAVE_ARGS_H */

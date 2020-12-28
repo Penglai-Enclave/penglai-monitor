@@ -100,6 +100,8 @@ struct call_enclave_arg_t
     uintptr_t resp_vaddr;
     uintptr_t resp_size;
 };
+
 uintptr_t call_enclave(uintptr_t *regs, unsigned int enclave_id, uintptr_t arg);
+uintptr_t enclave_return(uintptr_t *regs, uintptr_t arg);
 
 #endif /* _ENCLAVE_H */

@@ -665,6 +665,13 @@ timer_irq_out:
 uintptr_t call_enclave(uintptr_t* regs, unsigned int callee_eid, uintptr_t arg)
 {
   uintptr_t ret = 0;
-  printm("M MODE: call encalve success\r\n");
+  printm("M mode: call encalve success\r\n");
   return ret;
+}
+
+uintptr_t enclave_return(uintptr_t* regs, uintptr_t arg)
+{
+    uintptr_t ret = 0;
+    printm("M mode: return encalve success\r\n");
+    return ret;
 }
