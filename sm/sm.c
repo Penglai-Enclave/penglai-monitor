@@ -3,6 +3,7 @@
 #include "pmp.h"
 #include "enclave.h"
 #include "math.h"
+#include "enclave_vm.h"
 #include "server_enclave.h"
 
 static int sm_initialized = 0;
@@ -29,6 +30,57 @@ uintptr_t sm_mm_extend(uintptr_t paddr, unsigned long size)
   retval = mm_init(paddr, size);
 
   return retval;
+}
+
+uintptr_t pt_area_base = 0;
+uintptr_t pt_area_size = 0;
+uintptr_t mbitmap_base = 0;
+uintptr_t mbitmap_size = 0;
+uintptr_t pgd_order = 0;
+uintptr_t pmd_order = 0;
+spinlock_t mbitmap_lock = SPINLOCK_INIT;
+
+/**
+ * This function validates whether the enclave environment is ready
+ * It will check the PT_AREA and MBitmap.
+ * If the two regions are properly configured, it means the host OS
+ * has invoked SM_INIT sbi call and everything to run enclave is ready
+ */
+int enable_enclave()
+{
+  return pt_area_base && pt_area_size && mbitmap_base && mbitmap_size;
+}
+
+/**
+ * The function checks whether a range of physical meory is untrusted memory (for 
+ *  Host OS/apps to use)
+ * Return value:
+ * 	-1: some pages are not public (untrusted)
+ * 	 0: all pages are public (untrusted)
+ */
+int test_public_range(uintptr_t pfn, uintptr_t pagenum)
+{
+  if(!enable_enclave())
+    return 0;
+
+  if(pfn < ((uintptr_t)DRAM_BASE >> RISCV_PGSHIFT))
+    return -1;
+
+  pfn = pfn - ((uintptr_t)DRAM_BASE >> RISCV_PGSHIFT);
+  page_meta* meta = (page_meta*)mbitmap_base + pfn;
+  if((uintptr_t)(meta + pagenum) > (mbitmap_base + mbitmap_size))
+    return -1;
+
+  uintptr_t cur = 0;
+  while(cur < pagenum)
+  {
+    if(!IS_PUBLIC_PAGE(*meta))
+      return -1;
+    meta += 1;
+    cur += 1;
+  }
+
+  return 0;
 }
 
 //TODO: delete this function
@@ -185,6 +237,33 @@ uintptr_t sm_enclave_return(uintptr_t* regs, uintptr_t arg)
   uintptr_t ret = 0;
 
   ret = enclave_return(regs, arg);
+
+  return ret;
+}
+
+uintptr_t sm_create_server_enclave(uintptr_t enclave_sbi_param)
+{
+  struct enclave_sbi_param_t enclave_sbi_param_local;
+  uintptr_t retval = 0;
+  if(test_public_range(PADDR_TO_PFN(enclave_sbi_param),1)<0){
+    return ENCLAVE_ERROR;
+  }
+  retval = copy_from_host(&enclave_sbi_param_local,
+      (struct enclave_sbi_param_t*)enclave_sbi_param,
+      sizeof(struct enclave_sbi_param_t));
+  if(retval != 0)
+    return ENCLAVE_ERROR;
+
+  retval = create_server_enclave(enclave_sbi_param_local);
+
+  return retval;
+}
+
+uintptr_t sm_destroy_server_enclave(uintptr_t *regs, uintptr_t enclave_id)
+{
+  uintptr_t ret = 0;
+
+  ret = destroy_server_enclave(regs, enclave_id);
 
   return ret;
 }

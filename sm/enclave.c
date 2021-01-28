@@ -1,4 +1,5 @@
 #include "enclave.h"
+#include "enclave_vm.h"
 #include "sm.h"
 #include "math.h"
 #include <string.h>
@@ -8,6 +9,14 @@ static struct cpu_state_t cpus[MAX_HARTS] = {{0,}, };
 
 //spinlock
 static spinlock_t enclave_metadata_lock = SPINLOCK_INIT;
+void acquire_enclave_metadata_lock()
+{
+  spinlock_lock(&enclave_metadata_lock);
+}
+void release_enclave_metadata_lock()
+{
+  spinlock_unlock(&enclave_metadata_lock);
+}
 
 //enclave metadata
 struct link_mem_t* enclave_metadata_head = NULL;
@@ -40,6 +49,11 @@ static void enter_enclave_world(int eid)
 }
 
 static int get_enclave_id()
+{
+  return cpus[read_csr(mhartid)].eid;
+}
+
+int get_curr_enclave_id()
 {
   return cpus[read_csr(mhartid)].eid;
 }
@@ -154,7 +168,7 @@ int remove_link_mem(struct link_mem_t** head, struct link_mem_t* ptr)
   return retval;
 }
 
-static struct enclave_t* alloc_enclave()
+struct enclave_t* alloc_enclave()
 {
   struct link_mem_t *cur, *next;
   struct enclave_t* enclave = NULL;
@@ -216,7 +230,7 @@ alloc_eid_out:
   return enclave;
 }
 
-static int free_enclave(int eid)
+int free_enclave(int eid)
 {
   struct link_mem_t *cur, *next;
   struct enclave_t *enclave = NULL;
@@ -372,7 +386,8 @@ int swap_from_enclave_to_host(uintptr_t* regs, struct enclave_t* enclave)
 
 uintptr_t create_enclave(struct enclave_sbi_param_t create_args)
 {
-  struct enclave_t* enclave;
+  struct enclave_t* enclave = NULL;
+  uintptr_t ret = 0;
 
   enclave = alloc_enclave();
   if(!enclave)
@@ -396,15 +411,109 @@ uintptr_t create_enclave(struct enclave_sbi_param_t create_args)
   enclave->ocall_arg0 = create_args.ecall_arg1;
   enclave->ocall_arg1 = create_args.ecall_arg2;
   enclave->ocall_syscall_num = create_args.ecall_arg3;
+  enclave->kbuffer = create_args.kbuffer;
+  enclave->kbuffer_size = create_args.kbuffer_size;
+  enclave->shm_paddr = create_args.shm_paddr;
+  enclave->shm_size = create_args.shm_size;
   enclave->host_ptbr = read_csr(satp);
   enclave->thread_context.encl_ptbr = (create_args.paddr >> (RISCV_PGSHIFT) | SATP_MODE_CHOICE);
   enclave->root_page_table = (unsigned long*)create_args.paddr;
   enclave->state = FRESH;
+  enclave->caller_eid = -1;
+  enclave->top_caller_eid = -1;
+  enclave->cur_callee_eid = -1;
   
   spinlock_unlock(&enclave_metadata_lock);
 
   copy_word_to_host((unsigned int*)create_args.eid_ptr, enclave->eid);
 
+  // //traverse vmas
+  // struct pm_area_struct* pma = (struct pm_area_struct*)(create_args.paddr);
+  // struct vm_area_struct* vma = (struct vm_area_struct*)(create_args.paddr + sizeof(struct pm_area_struct));
+  // pma->paddr = create_args.paddr;
+  // pma->size = create_args.size;
+  // pma->free_mem = create_args.free_mem;
+  // if(pma->free_mem < pma->paddr || pma->free_mem >= pma->paddr+pma->size
+  //     || pma->free_mem & ((1<<RISCV_PGSHIFT) - 1))
+  // {
+  //   ret = ENCLAVE_ERROR;
+  //   goto failed;
+  // }
+  // pma->pm_next = NULL;
+  // enclave->pma_list = pma;
+  // traverse_vmas(enclave->root_page_table, vma);
+
+  // //FIXME: here we assume there are exactly text(include text/data/bss) vma and stack vma
+  // while(vma)
+  // {
+  //   if(vma->va_start == ENCLAVE_DEFAULT_TEXT_BASE)
+  //   {
+  //     enclave->text_vma = vma;
+  //   }
+  //   if(vma->va_end == ENCLAVE_DEFAULT_STACK_BASE)
+  //   {
+  //     enclave->stack_vma = vma;
+  //     enclave->_stack_top = enclave->stack_vma->va_start;
+  //   }
+  //   vma->pma = pma;
+  //   vma = vma->vm_next;
+  // }
+  // if(enclave->text_vma)
+  //   enclave->text_vma->vm_next = NULL;
+  // if(enclave->stack_vma)
+  //   enclave->stack_vma->vm_next = NULL;
+  // enclave->_heap_top = ENCLAVE_DEFAULT_HEAP_BASE;
+  // enclave->heap_vma = NULL;
+  // enclave->mmap_vma = NULL;
+
+  // enclave->free_pages = NULL;
+  // enclave->free_pages_num = 0;
+  // uintptr_t free_mem = create_args.paddr + create_args.size - RISCV_PGSIZE;
+  // while(free_mem >= create_args.free_mem)
+  // {
+  //   struct page_t *page = (struct page_t*)free_mem;
+  //   page->paddr = free_mem;
+  //   page->next = enclave->free_pages;
+  //   enclave->free_pages = page;
+  //   enclave->free_pages_num += 1;
+  //   free_mem -= RISCV_PGSIZE;
+  // }
+
+  // //check kbuffer
+  // if(create_args.kbuffer_size < RISCV_PGSIZE || create_args.kbuffer & (RISCV_PGSIZE-1) || create_args.kbuffer_size & (RISCV_PGSIZE-1))
+  // {
+  //   ret = ENCLAVE_ERROR;
+  //   goto failed;
+  // }
+  // mmap((uintptr_t*)(enclave->root_page_table), &(enclave->free_pages), ENCLAVE_DEFAULT_KBUFFER, create_args.kbuffer, create_args.kbuffer_size);
+
+  // //check shm
+  // if(create_args.shm_paddr && create_args.shm_size &&
+  //     !(create_args.shm_paddr & (RISCV_PGSIZE-1)) && !(create_args.shm_size & (RISCV_PGSIZE-1)))
+  // {
+  //   mmap((uintptr_t*)(enclave->root_page_table), &(enclave->free_pages), ENCLAVE_DEFAULT_SHM_BASE, create_args.shm_paddr, create_args.shm_size);
+  //   enclave->shm_paddr = create_args.shm_paddr;
+  //   enclave->shm_size = create_args.shm_size;
+  // }
+  // else
+  // {
+  //   enclave->shm_paddr = 0;
+  //   enclave->shm_size = 0;
+  // }
+//   enclave->shm_paddr = 0;
+//   enclave->shm_size = 0;
+//   copy_word_to_host((unsigned int*)create_args.eid_ptr, enclave->eid);
+
+// out:
+//   release_enclave_metadata_lock();
+//   return ret;
+
+// failed:
+//   if(enclave)
+//   {
+//     free_enclave(enclave->eid);
+//   }
+//   release_enclave_metadata_lock();
   return 0;
 }
 

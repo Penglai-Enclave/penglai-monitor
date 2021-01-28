@@ -12,8 +12,8 @@ struct server_enclave_t
 
 #define SERVERS_PER_METADATA_REGION 100
 
-//uintptr_t create_server_enclave(struct enclave_create_param_t create_args);
-//uintptr_t destroy_server_enclave(uintptr_t* regs, unsigned int eid);
+uintptr_t create_server_enclave(struct enclave_sbi_param_t create_args);
+uintptr_t destroy_server_enclave(uintptr_t* regs, unsigned int eid);
 uintptr_t acquire_server_enclave(uintptr_t *regs, char *server_name);
 
 #endif /* _SERVER_ENCLAVE_H */

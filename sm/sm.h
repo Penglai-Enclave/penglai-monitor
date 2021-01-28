@@ -30,6 +30,8 @@
 #define SBI_ACQUIRE_SERVER      87
 #define SBI_CALL_ENCLAVE        86
 #define SBI_ENCLAVE_RETURN      85
+#define SBI_CREATE_SERVER_ENCLAVE         84
+#define SBI_DESTROY_SERVER_ENCLAVE        83
 
 //Error code of SBI_ALLOC_ENCLAVE_MEM
 #define ENCLAVE_NO_MEMORY       -2
@@ -41,7 +43,26 @@
 #define RESUME_FROM_TIMER_IRQ    2000
 #define RESUME_FROM_STOP         2003
 
+typedef int page_meta;
+#define NORMAL_PAGE                      ((page_meta)0x7FFFFFFF)
+#define ZERO_MAP_PAGE                    ((page_meta)0x7FFFFFFE)
+#define PRIVATE_PAGE                     ((page_meta)0x80000000)
+#define IS_PRIVATE_PAGE(meta)            (((page_meta)meta) & PRIVATE_PAGE)
+#define IS_PUBLIC_PAGE(meta)             (!IS_PRIVATE_PAGE(meta))
+#define IS_ZERO_MAP_PAGE(meta)           (((page_meta)meta & NORMAL_PAGE) == ZERO_MAP_PAGE)
+#define IS_SCHRODINGER_PAGE(meta)        (((page_meta)meta & NORMAL_PAGE) != NORMAL_PAGE)
+#define MAKE_PRIVATE_PAGE(meta)          ((page_meta)meta | PRIVATE_PAGE)
+#define MAKE_PUBLIC_PAGE(meta)           ((page_meta)meta & NORMAL_PAGE)
+#define MAKE_ZERO_MAP_PAGE(meta)         (((page_meta)meta & PRIVATE_PAGE) | ZERO_MAP_PAGE)
+#define MAKE_SCHRODINGER_PAGE(pri, pos)  (pri ? \
+    (PRIVATE_PAGE | ((page_meta)pos & NORMAL_PAGE)) \
+    : ((page_meta)pos & NORMAL_PAGE))
+#define SCHRODINGER_PTE_POS(meta)        (IS_ZERO_MAP_PAGE(meta) ? -1 : ((int)meta & (int)0x7FFFFFFF))
+
 void sm_init();
+
+int enable_enclave();
+int test_public_range(uintptr_t pfn, uintptr_t pagenum);
 
 uintptr_t sm_mm_init(uintptr_t paddr, unsigned long size);
 
@@ -76,5 +97,9 @@ uintptr_t sm_server_enclave_acquire(uintptr_t *regs, uintptr_t server_name);
 uintptr_t sm_call_enclave(uintptr_t *regs, uintptr_t enclave_id, uintptr_t arg);
 
 uintptr_t sm_enclave_return(uintptr_t *regs, uintptr_t arg);
+
+uintptr_t sm_create_server_enclave(uintptr_t enclave_create_args);
+
+uintptr_t sm_destroy_server_enclave(uintptr_t *regs, uintptr_t enclave_id);
 
 #endif /* _SM_H */

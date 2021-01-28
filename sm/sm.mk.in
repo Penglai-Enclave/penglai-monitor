@@ -6,7 +6,8 @@ sm_hdrs = \
   platform/@TARGET_PLATFORM@/platform.h \
   thread.h \
   math.h \
-  server_enclave.h
+  server_enclave.h \
+  enclave_vm.h
 
 sm_c_srcs = \
   ipi.c \
@@ -16,7 +17,8 @@ sm_c_srcs = \
   enclave.c \
   thread.c \
   math.c \
-  server_enclave.c
+  server_enclave.c \
+  enclave_vm.c
 
 sm_asm_srcs = \
 

@@ -201,6 +201,12 @@ send_ipi:
     case SBI_EXIT_ENCLAVE:
       retval = sm_exit_enclave(regs, arg0);
       break;
+    case SBI_CREATE_SERVER_ENCLAVE:
+      retval = sm_create_server_enclave(arg0);
+      break;
+    case SBI_DESTROY_SERVER_ENCLAVE:
+      retval = sm_destroy_server_enclave(regs, arg0);
+      break;
     case SBI_ACQUIRE_SERVER:
       retval = sm_server_enclave_acquire(regs, arg0);
       break;
