@@ -22,7 +22,7 @@
 //#       hole        #
 //##################### 0x0
 
-// #define ENCLAVE_DEFAULT_STACK 0x0000004000000000;
+#define ENCLAVE_DEFAULT_STACK 0x0000004000000000;
 
 #define N_GENERAL_REGISTERS 32
 

@@ -32,7 +32,6 @@ typedef enum
   RUNNABLE,
   RUNNING,
   STOPPED, 
-  ATTESTING,
   OCALLING
 } enclave_state_t;
 
@@ -102,18 +101,6 @@ struct enclave_t
   //entry point of enclave
   unsigned long entry_point;
 
-  ///shared mem with kernel
-  unsigned long kbuffer;//paddr
-  unsigned long kbuffer_size;
-
-  ///shared mem with host
-  unsigned long shm_paddr;
-  unsigned long shm_size;
-
-  ///host memory arg
-  unsigned long mm_arg_paddr;
-  unsigned long mm_arg_size;
-
   unsigned long* ocall_func_id;
   unsigned long* ocall_arg0;
   unsigned long* ocall_arg1;
@@ -129,7 +116,6 @@ struct enclave_t
   unsigned int top_caller_eid;
   unsigned int caller_eid;
   unsigned int cur_callee_eid;
-  unsigned char hash[HASH_SIZE];
 };
 
 struct cpu_state_t

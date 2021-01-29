@@ -43,26 +43,7 @@
 #define RESUME_FROM_TIMER_IRQ    2000
 #define RESUME_FROM_STOP         2003
 
-typedef int page_meta;
-#define NORMAL_PAGE                      ((page_meta)0x7FFFFFFF)
-#define ZERO_MAP_PAGE                    ((page_meta)0x7FFFFFFE)
-#define PRIVATE_PAGE                     ((page_meta)0x80000000)
-#define IS_PRIVATE_PAGE(meta)            (((page_meta)meta) & PRIVATE_PAGE)
-#define IS_PUBLIC_PAGE(meta)             (!IS_PRIVATE_PAGE(meta))
-#define IS_ZERO_MAP_PAGE(meta)           (((page_meta)meta & NORMAL_PAGE) == ZERO_MAP_PAGE)
-#define IS_SCHRODINGER_PAGE(meta)        (((page_meta)meta & NORMAL_PAGE) != NORMAL_PAGE)
-#define MAKE_PRIVATE_PAGE(meta)          ((page_meta)meta | PRIVATE_PAGE)
-#define MAKE_PUBLIC_PAGE(meta)           ((page_meta)meta & NORMAL_PAGE)
-#define MAKE_ZERO_MAP_PAGE(meta)         (((page_meta)meta & PRIVATE_PAGE) | ZERO_MAP_PAGE)
-#define MAKE_SCHRODINGER_PAGE(pri, pos)  (pri ? \
-    (PRIVATE_PAGE | ((page_meta)pos & NORMAL_PAGE)) \
-    : ((page_meta)pos & NORMAL_PAGE))
-#define SCHRODINGER_PTE_POS(meta)        (IS_ZERO_MAP_PAGE(meta) ? -1 : ((int)meta & (int)0x7FFFFFFF))
-
 void sm_init();
-
-int enable_enclave();
-int test_public_range(uintptr_t pfn, uintptr_t pagenum);
 
 uintptr_t sm_mm_init(uintptr_t paddr, unsigned long size);
 
