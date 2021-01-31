@@ -39,9 +39,21 @@
 #define ENCLAVE_SUCCESS          0
 #define ENCLAVE_TIMER_IRQ        1
 
+//Error code of SBI_RUN_ENCLAVE
+//#define ENCLAVE_ERROR           -1
+#define ENCLAVE_SUCCESS          0
+#define ENCLAVE_TIMER_IRQ        1
+#define ENCLAVE_OCALL            2
+
 //error code of SBI_RESUME_RNCLAVE
 #define RESUME_FROM_TIMER_IRQ    2000
 #define RESUME_FROM_STOP         2003
+#define RESUME_FROM_OCALL              2004
+
+//ENCLAVE OCALL NUMVERS
+#define OCALL_MMAP                   1
+#define OCALL_UNMAP                  2
+#define OCALL_SYS_WRITE              3
 
 void sm_init();
 
@@ -65,7 +77,7 @@ uintptr_t sm_resume_enclave(uintptr_t *regs, uintptr_t enclave_id);
 
 uintptr_t sm_destroy_enclave(uintptr_t *regs, uintptr_t enclave_id, uintptr_t destroy_flag);
 
-uintptr_t sm_enclave_ocall(uintptr_t *regs, uintptr_t ocall_func_id, uintptr_t arg);
+uintptr_t sm_enclave_ocall(uintptr_t *regs, uintptr_t ocall_func_id, uintptr_t arg0, uintptr_t arg1);
 
 uintptr_t sm_exit_enclave(uintptr_t *regs, unsigned long retval);
 

@@ -123,7 +123,6 @@ uintptr_t sm_resume_enclave(uintptr_t* regs, unsigned long eid)
 {
   uintptr_t retval = 0;
   uintptr_t resume_func_id = regs[11];
-
   switch(resume_func_id)
   {
     case RESUME_FROM_TIMER_IRQ:
@@ -136,6 +135,9 @@ uintptr_t sm_resume_enclave(uintptr_t* regs, unsigned long eid)
     case RESUME_FROM_STOP:
       //printm("resume from stop\r\n");
       retval = resume_from_stop(regs, eid);
+      break;
+    case RESUME_FROM_OCALL:
+      retval = resume_from_ocall(regs, eid);
       break;
     default:
       break;
@@ -151,6 +153,28 @@ uintptr_t sm_exit_enclave(uintptr_t* regs, unsigned long retval)
   ret = exit_enclave(regs, retval);
 
   return ret;
+}
+
+uintptr_t sm_enclave_ocall(uintptr_t* regs, uintptr_t ocall_id, uintptr_t arg0, uintptr_t arg1)
+{
+  // printm("into sm_enclave_ocall: %d\r\n", ocall_id);
+  uintptr_t ret = 0;
+  switch(ocall_id)
+  {
+    case OCALL_MMAP:
+      ret = enclave_mmap(regs, arg0, arg1);
+      break;
+    case OCALL_UNMAP:
+      ret = enclave_unmap(regs, arg0, arg1);
+      break;
+    case OCALL_SYS_WRITE:
+      ret = enclave_sys_write(regs);
+      break;
+    default:
+      ret = -1UL;
+      break;
+    }
+    return ret;
 }
 
 uintptr_t sm_do_timer_irq(uintptr_t *regs, uintptr_t mcause, uintptr_t mepc)

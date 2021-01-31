@@ -1,5 +1,6 @@
 #include "sm.h"
 #include "enclave.h"
+#include "enclave_vm.h"
 #include "server_enclave.h"
 #include "ipi.h"
 #include TARGET_PLATFORM_HEADER
@@ -167,17 +168,72 @@ uintptr_t create_server_enclave(struct enclave_sbi_param_t create_args)
   enclave->ocall_arg1 = create_args.ecall_arg2;
   enclave->ocall_syscall_num = create_args.ecall_arg3;
   enclave->host_ptbr = read_csr(satp);
-  enclave->root_page_table = (unsigned long*)create_args.paddr;
-  enclave->thread_context.encl_ptbr = (create_args.paddr >> (RISCV_PGSHIFT) | SATP_MODE_CHOICE);
+  enclave->root_page_table = create_args.paddr + RISCV_PGSIZE;
+  enclave->thread_context.encl_ptbr = ((create_args.paddr + RISCV_PGSIZE) >> (RISCV_PGSHIFT) | SATP_MODE_CHOICE);
   enclave->type = SERVER_ENCLAVE;
   //we directly set server_enclave's state as RUNNABLE as it won't be called by run_enclave call
   enclave->state = RUNNABLE;
   enclave->caller_eid = -1;
   enclave->top_caller_eid = -1;
   enclave->cur_callee_eid = -1;
+
+  //traverse vmas
+  struct pm_area_struct* pma = (struct pm_area_struct*)(create_args.paddr);
+  struct vm_area_struct* vma = (struct vm_area_struct*)(create_args.paddr + sizeof(struct pm_area_struct));
+  pma->paddr = create_args.paddr;
+  pma->size = create_args.size;
+  pma->free_mem = create_args.free_mem;
+  if(pma->free_mem < pma->paddr || pma->free_mem >= pma->paddr+pma->size
+     || pma->free_mem & ((1<<RISCV_PGSHIFT) - 1))
+  {
+    ret = ENCLAVE_ERROR;
+    printm("fail: ENCLAVE_ERROR");
+    return ret;
+  }
+  pma->pm_next = NULL;
+  enclave->pma_list = pma;
+  traverse_vmas(enclave->root_page_table, vma);
+
+  //FIXME: here we assume there are exactly text(include text/data/bss) vma and stack vma
+  while(vma)
+  {
+    if(vma->va_start == ENCLAVE_DEFAULT_TEXT_BASE)
+    {
+      enclave->text_vma = vma;
+    }
+    if(vma->va_end == ENCLAVE_DEFAULT_STACK_BASE)
+    {
+      enclave->stack_vma = vma;
+      enclave->_stack_top = enclave->stack_vma->va_start;
+    }
+    vma->pma = pma;
+    vma = vma->vm_next;
+  }
+  if(enclave->text_vma)
+    enclave->text_vma->vm_next = NULL;
+  if(enclave->stack_vma)
+    enclave->stack_vma->vm_next = NULL;
+  enclave->_heap_top = ENCLAVE_DEFAULT_HEAP_BASE;
+  enclave->heap_vma = NULL;
+  enclave->mmap_vma = NULL;
+
+  enclave->free_pages = NULL;
+  enclave->free_pages_num = 0;
+  uintptr_t free_mem = create_args.paddr + create_args.size - RISCV_PGSIZE;
+  while(free_mem >= create_args.free_mem)
+  {
+    struct page_t *page = (struct page_t*)free_mem;
+    page->paddr = free_mem;
+    page->next = enclave->free_pages;
+    enclave->free_pages = page;
+    enclave->free_pages_num += 1;
+    free_mem -= RISCV_PGSIZE;
+  }
+
   release_enclave_metadata_lock();
   copy_word_to_host((unsigned int*)create_args.eid_ptr, enclave->eid);
   return 0;
+
 failed:
   release_enclave_metadata_lock();
   printm("M MODE: acquire encalve failed\r\n");

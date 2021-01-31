@@ -93,13 +93,17 @@ struct enclave_t
   unsigned long* enclave_mem_metadata_page;
 
   //root page table of enclave
-  unsigned long* root_page_table;
+  unsigned long root_page_table;
 
   //root page table register for host
   unsigned long host_ptbr;
 
   //entry point of enclave
   unsigned long entry_point;
+
+  ///shared mem with kernel
+  unsigned long kbuffer;//paddr
+  unsigned long kbuffer_size;
 
   unsigned long* ocall_func_id;
   unsigned long* ocall_arg0;
@@ -133,6 +137,7 @@ struct enclave_t* get_enclave(int eid);
 uintptr_t copy_from_host(void* dest, void* src, size_t size);
 uintptr_t copy_to_host(void* dest, void* src, size_t size);
 int copy_word_to_host(unsigned int* ptr, uintptr_t value);
+int copy_dword_to_host(uintptr_t* ptr, uintptr_t value);
 
 struct link_mem_t* init_mem_link(unsigned long mem_size, unsigned long slab_size);
 struct link_mem_t* add_link_mem(struct link_mem_t** tail);
@@ -147,6 +152,11 @@ uintptr_t resume_enclave(uintptr_t* regs, unsigned int eid);
 uintptr_t resume_from_stop(uintptr_t* regs, unsigned int eid);
 uintptr_t exit_enclave(uintptr_t* regs, unsigned long retval);
 uintptr_t do_timer_irq(uintptr_t* regs, uintptr_t mcause, uintptr_t mepc);
+uintptr_t resume_from_ocall(uintptr_t* regs, unsigned int eid);
+
+uintptr_t enclave_mmap(uintptr_t* regs, uintptr_t vaddr, uintptr_t size);
+uintptr_t enclave_unmap(uintptr_t* regs, uintptr_t vaddr, uintptr_t size);
+uintptr_t enclave_sys_write(uintptr_t *regs);
 
 struct call_enclave_arg_t
 {

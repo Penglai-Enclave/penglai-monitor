@@ -196,7 +196,7 @@ send_ipi:
       retval = 0;//sm_destroy_enclave(regs, arg0,arg1);
       break;
     case SBI_ENCLAVE_OCALL:
-      retval = 0;//sm_enclave_ocall(regs, arg0);
+      retval = sm_enclave_ocall(regs, arg0, arg1, arg2);
       break;
     case SBI_EXIT_ENCLAVE:
       retval = sm_exit_enclave(regs, arg0);

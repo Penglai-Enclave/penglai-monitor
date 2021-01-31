@@ -3,27 +3,6 @@
 
 #include <stdint.h>
 
-//default layout of enclave
-//#####################
-//#   reserved for    #
-//#       s mode      #
-//##################### 0xffffffe000000000
-//#       hole        #
-//##################### 0x0000004000000000
-//#       stack       #
-//#                   #
-//#       heap        #
-//##################### 0x0000002000000000
-//#  untrusted memory #
-//#  shared with host #
-//##################### 0x0000001000000000
-//#     code & data   #
-//##################### 0x0000000000001000
-//#       hole        #
-//##################### 0x0
-
-#define ENCLAVE_DEFAULT_STACK 0x0000004000000000;
-
 #define N_GENERAL_REGISTERS 32
 
 struct general_registers_t

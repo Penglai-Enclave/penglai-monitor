@@ -1,4 +1,5 @@
 #include "enclave.h"
+#include "enclave_vm.h"
 #include "sm.h"
 #include "math.h"
 #include <string.h>
@@ -34,6 +35,12 @@ uintptr_t copy_to_host(void* dest, void* src, size_t size)
 }
 
 int copy_word_to_host(unsigned int* ptr, uintptr_t value)
+{
+  *ptr = value;
+  return 0;
+}
+
+int copy_dword_to_host(uintptr_t* ptr, uintptr_t value)
 {
   *ptr = value;
   return 0;
@@ -167,13 +174,17 @@ int remove_link_mem(struct link_mem_t** head, struct link_mem_t* ptr)
   return retval;
 }
 
+/** 
+ * \brief alloc an enclave_t structure from encalve_metadata_head
+ * 
+ * eid represents the location in the list
+ * sometimes you may need to acquire lock before calling this function
+ */
 struct enclave_t* alloc_enclave()
 {
   struct link_mem_t *cur, *next;
   struct enclave_t* enclave = NULL;
   int i, found, eid;
-
-  spinlock_lock(&enclave_metadata_lock);
 
   //enclave metadata list hasn't be initialized yet
   if(enclave_metadata_head == NULL)
@@ -225,17 +236,15 @@ struct enclave_t* alloc_enclave()
   }
 
 alloc_eid_out:
-  spinlock_unlock(&enclave_metadata_lock);
   return enclave;
 }
 
+//sometimes you may need to acquire lock before calling this function
 int free_enclave(int eid)
 {
   struct link_mem_t *cur, *next;
   struct enclave_t *enclave = NULL;
   int i, found, count, ret_val;
-
-  spinlock_lock(&enclave_metadata_lock);
 
   found = 0;
   count = 0;
@@ -260,18 +269,15 @@ int free_enclave(int eid)
     ret_val = -1;
   }
 
-  spinlock_unlock(&enclave_metadata_lock);
-
   return ret_val;
 }
 
+//sometimes you may need to acquire lock before calling this function
 struct enclave_t* get_enclave(int eid)
 {
   struct link_mem_t *cur, *next;
   struct enclave_t *enclave;
   int i, found, count;
-
-  spinlock_lock(&enclave_metadata_lock);
 
   found = 0;
   count = 0;
@@ -294,8 +300,27 @@ struct enclave_t* get_enclave(int eid)
     enclave = NULL;
   }
 
-  spinlock_unlock(&enclave_metadata_lock);
   return enclave;
+}
+
+/**
+ * \brief this function is used to handle IPC in enclave,
+ * 	  it will return the last enclave in the chain.
+ * 	  This is used to help us identify the real executing encalve.
+ */
+struct enclave_t* __get_real_enclave(int eid)
+{
+  struct enclave_t* enclave = get_enclave(eid);
+  if(!enclave)
+    return NULL;
+
+  struct enclave_t* real_enclave = NULL;
+  if(enclave->cur_callee_eid == -1)
+    real_enclave = enclave;
+  else
+    real_enclave = get_enclave(enclave->cur_callee_eid);
+
+  return real_enclave;
 }
 
 int swap_from_host_to_enclave(uintptr_t* host_regs, struct enclave_t* enclave)
@@ -388,6 +413,8 @@ uintptr_t create_enclave(struct enclave_sbi_param_t create_args)
   struct enclave_t* enclave = NULL;
   uintptr_t ret = 0;
 
+acquire_enclave_metadata_lock();
+
   enclave = alloc_enclave();
   if(!enclave)
   {
@@ -397,9 +424,6 @@ uintptr_t create_enclave(struct enclave_sbi_param_t create_args)
 
   //TODO: check whether enclave memory is out of bound
   //TODO: verify enclave page table layout
-
-  spinlock_lock(&enclave_metadata_lock);
-
   enclave->paddr = create_args.paddr;
   enclave->size = create_args.size;
   enclave->entry_point = create_args.entry_point;
@@ -410,15 +434,79 @@ uintptr_t create_enclave(struct enclave_sbi_param_t create_args)
   enclave->ocall_arg0 = create_args.ecall_arg1;
   enclave->ocall_arg1 = create_args.ecall_arg2;
   enclave->ocall_syscall_num = create_args.ecall_arg3;
+  enclave->kbuffer = create_args.kbuffer;
+  enclave->kbuffer_size = create_args.kbuffer_size;
   enclave->host_ptbr = read_csr(satp);
-  enclave->thread_context.encl_ptbr = (create_args.paddr >> (RISCV_PGSHIFT) | SATP_MODE_CHOICE);
-  enclave->root_page_table = (unsigned long*)create_args.paddr;
+  enclave->root_page_table = create_args.paddr + RISCV_PGSIZE;
+  enclave->thread_context.encl_ptbr = ((create_args.paddr + RISCV_PGSIZE) >> RISCV_PGSHIFT) | SATP_MODE_CHOICE;
   enclave->state = FRESH;
   enclave->caller_eid = -1;
   enclave->top_caller_eid = -1;
   enclave->cur_callee_eid = -1;
+
+    //traverse vmas
+  struct pm_area_struct* pma = (struct pm_area_struct*)(create_args.paddr);
+  struct vm_area_struct* vma = (struct vm_area_struct*)(create_args.paddr + sizeof(struct pm_area_struct));
+  pma->paddr = create_args.paddr;
+  pma->size = create_args.size;
+  pma->free_mem = create_args.free_mem;
+  if(pma->free_mem < pma->paddr || pma->free_mem >= pma->paddr+pma->size
+     || pma->free_mem & ((1<<RISCV_PGSHIFT) - 1))
+  {
+    ret = ENCLAVE_ERROR;
+    printm("fail: ENCLAVE_ERROR");
+    return ret;
+  }
+  pma->pm_next = NULL;
+  enclave->pma_list = pma;
+  traverse_vmas(enclave->root_page_table, vma);
+
+  //FIXME: here we assume there are exactly text(include text/data/bss) vma and stack vma
+  while(vma)
+  {
+    if(vma->va_start == ENCLAVE_DEFAULT_TEXT_BASE)
+    {
+      enclave->text_vma = vma;
+    }
+    if(vma->va_end == ENCLAVE_DEFAULT_STACK_BASE)
+    {
+      enclave->stack_vma = vma;
+      enclave->_stack_top = enclave->stack_vma->va_start;
+    }
+    vma->pma = pma;
+    vma = vma->vm_next;
+  }
+  if(enclave->text_vma)
+    enclave->text_vma->vm_next = NULL;
+  if(enclave->stack_vma)
+    enclave->stack_vma->vm_next = NULL;
+  enclave->_heap_top = ENCLAVE_DEFAULT_HEAP_BASE;
+  enclave->heap_vma = NULL;
+  enclave->mmap_vma = NULL;
+
+  enclave->free_pages = NULL;
+  enclave->free_pages_num = 0;
+  uintptr_t free_mem = create_args.paddr + create_args.size - RISCV_PGSIZE;
+  while(free_mem >= create_args.free_mem)
+  {
+    struct page_t *page = (struct page_t*)free_mem;
+    page->paddr = free_mem;
+    page->next = enclave->free_pages;
+    enclave->free_pages = page;
+    enclave->free_pages_num += 1;
+    free_mem -= RISCV_PGSIZE;
+  }
+
+  //check kbuffer
+  if(create_args.kbuffer_size < RISCV_PGSIZE || create_args.kbuffer & (RISCV_PGSIZE-1) || create_args.kbuffer_size & (RISCV_PGSIZE-1))
+  {
+    ret = ENCLAVE_ERROR;
+    printm("check kbuffer fail: ENCLAVE_ERROR");
+    return ret;
+  }
+  mmap((uintptr_t*)(enclave->root_page_table), &(enclave->free_pages), ENCLAVE_DEFAULT_KBUFFER, create_args.kbuffer, create_args.kbuffer_size);
   
-  spinlock_unlock(&enclave_metadata_lock);
+  release_enclave_metadata_lock();
 
   copy_word_to_host((unsigned int*)create_args.eid_ptr, enclave->eid);
 
@@ -430,14 +518,14 @@ uintptr_t run_enclave(uintptr_t* regs, unsigned int eid)
   struct enclave_t* enclave;
   uintptr_t retval = 0;
 
+  acquire_enclave_metadata_lock();
+
   enclave = get_enclave(eid);
   if(!enclave)
   {
     printm("M mode: run_enclave: wrong enclave id\r\n");
     return -1UL;
   }
-
-  spinlock_lock(&enclave_metadata_lock);
 
   if(enclave->state != FRESH)
   {
@@ -475,21 +563,22 @@ uintptr_t run_enclave(uintptr_t* regs, unsigned int eid)
   enclave->state = RUNNING;
 
 run_enclave_out:
-  spinlock_unlock(&enclave_metadata_lock);
+  release_enclave_metadata_lock();
   return retval;
 }
 
 uintptr_t stop_enclave(uintptr_t* regs, unsigned int eid)
 {
   uintptr_t retval = 0;
+
+  acquire_enclave_metadata_lock();
+
   struct enclave_t *enclave = get_enclave(eid);
   if(!enclave)
   {
     printm("M mode: stop_enclave: wrong enclave id%d\r\n", eid);
     return -1UL;
   }
-  
-  spinlock_lock(&enclave_metadata_lock);
 
   if(enclave->host_ptbr != read_csr(satp))
   {
@@ -506,21 +595,22 @@ uintptr_t stop_enclave(uintptr_t* regs, unsigned int eid)
   enclave->state = STOPPED;
 
 stop_enclave_out:
-  spinlock_unlock(&enclave_metadata_lock);
+  release_enclave_metadata_lock();
   return retval;
 }
 
 uintptr_t resume_from_stop(uintptr_t* regs, unsigned int eid)
 {
   uintptr_t retval = 0;
+
+  acquire_enclave_metadata_lock();
+
   struct enclave_t* enclave = get_enclave(eid);
   if(!enclave)
   {
     printm("M mode: resume_from_stop: wrong enclave id%d\r\n", eid);
     return -1UL;
   }
-
-  spinlock_lock(&enclave_metadata_lock);
 
   if(enclave->host_ptbr != read_csr(satp))
   {
@@ -539,21 +629,22 @@ uintptr_t resume_from_stop(uintptr_t* regs, unsigned int eid)
   enclave->state = RUNNABLE;
 
 resume_from_stop_out:
-  spinlock_unlock(&enclave_metadata_lock);
+  release_enclave_metadata_lock();
   return retval;
 }
 
 uintptr_t resume_enclave(uintptr_t* regs, unsigned int eid)
 {
   uintptr_t retval = 0;
+
+  acquire_enclave_metadata_lock();
+
   struct enclave_t* enclave = get_enclave(eid);
   if(!enclave)
   {
     printm("M mode: resume_enclave: wrong enclave id%d\r\n", eid);
     return -1UL;
   }
-
-  spinlock_lock(&enclave_metadata_lock);
 
   if(enclave->host_ptbr != read_csr(satp))
   {
@@ -595,7 +686,53 @@ uintptr_t resume_enclave(uintptr_t* regs, unsigned int eid)
   retval = regs[10];
 
 resume_enclave_out:
-  spinlock_unlock(&enclave_metadata_lock);
+  release_enclave_metadata_lock();
+  return retval;
+}
+
+//host use this fucntion to re-enter enclave world
+uintptr_t resume_from_ocall(uintptr_t* regs, unsigned int eid)
+{
+  uintptr_t retval = 0;
+  uintptr_t ocall_func_id = regs[12];
+  struct enclave_t* enclave = NULL;
+
+  acquire_enclave_metadata_lock();
+
+  enclave = __get_real_enclave(eid);
+  if(!enclave || enclave->state != OCALLING || enclave->host_ptbr != read_csr(satp))
+  {
+    retval = -1UL;
+    goto out;
+  }
+
+  switch(ocall_func_id)
+  {
+    case OCALL_MMAP:
+      //TODO
+      retval = 0;
+      break;
+    case OCALL_UNMAP:
+      //TODO
+      retval = 0;
+      break;
+    case OCALL_SYS_WRITE:
+      retval = enclave->thread_context.prev_state.a0;
+      break;
+    default:
+      retval = 0;
+      break;
+  }
+
+  if(swap_from_host_to_enclave(regs, enclave) < 0)
+  {
+    retval = -1UL;
+    goto out;
+  }
+  enclave->state = RUNNING;
+
+out:
+  release_enclave_metadata_lock();
   return retval;
 }
 
@@ -613,6 +750,8 @@ uintptr_t exit_enclave(uintptr_t* regs, unsigned long retval)
     return -1;
   }
 
+  acquire_enclave_metadata_lock();
+
   eid = get_enclave_id();
   enclave = get_enclave(eid);
   if(!enclave)
@@ -620,8 +759,6 @@ uintptr_t exit_enclave(uintptr_t* regs, unsigned long retval)
     printm("M mode: exit_enclave: didn't find eid%d 's corresponding enclave\r\n", eid);
     return -1UL;
   }
-
-  spinlock_lock(&enclave_metadata_lock);
 
   if(check_enclave_authentication(enclave) < 0)
   {
@@ -636,18 +773,62 @@ uintptr_t exit_enclave(uintptr_t* regs, unsigned long retval)
   //TODO: support multiple memory region
   memset((void*)(enclave->paddr), 0, enclave->size);
   mm_free((void*)(enclave->paddr), enclave->size);
-
-  spinlock_unlock(&enclave_metadata_lock);
   
   //free enclave struct
   free_enclave(eid);
+
+  release_enclave_metadata_lock();
   
   return 0;
+}
+
+uintptr_t enclave_mmap(uintptr_t* regs, uintptr_t vaddr, uintptr_t size)
+{
+  uintptr_t ret = 0;
+  //TODO
+  return ret;
+}
+
+uintptr_t enclave_unmap(uintptr_t* regs, uintptr_t vaddr, uintptr_t size)
+{
+  uintptr_t ret = 0;
+  //TODO
+  return ret;
+}
+
+uintptr_t enclave_sys_write(uintptr_t* regs)
+{
+  uintptr_t ret = 0;
+  int eid = get_curr_enclave_id();
+  struct enclave_t* enclave = NULL;
+  if(check_in_enclave_world() < 0)
+    return -1;
+
+  acquire_enclave_metadata_lock();
+
+  enclave = get_enclave(eid);
+  if(!enclave || check_enclave_authentication(enclave)!=0 || enclave->state != RUNNING)
+  {
+    ret = -1UL;
+    goto out;
+  }
+
+  copy_dword_to_host((uintptr_t*)enclave->ocall_func_id, OCALL_SYS_WRITE);
+
+  swap_from_enclave_to_host(regs, enclave);
+  enclave->state = OCALLING;
+  ret = ENCLAVE_OCALL;
+out:
+  release_enclave_metadata_lock();
+  return ret;
 }
 
 uintptr_t do_timer_irq(uintptr_t *regs, uintptr_t mcause, uintptr_t mepc)
 {
   uintptr_t retval = 0;
+
+  acquire_enclave_metadata_lock();
+
   unsigned int eid = get_enclave_id();
   struct enclave_t *enclave = get_enclave(eid);
   if(!enclave)
@@ -655,8 +836,6 @@ uintptr_t do_timer_irq(uintptr_t *regs, uintptr_t mcause, uintptr_t mepc)
     printm("M mode: something is wrong with enclave%d\r\n", eid);
     return -1UL;
   }
-
-  spinlock_lock(&enclave_metadata_lock);
 
   //TODO: check whether this enclave is destroyed
   if(enclave->state == DESTROYED)
@@ -675,7 +854,7 @@ uintptr_t do_timer_irq(uintptr_t *regs, uintptr_t mcause, uintptr_t mepc)
   regs[10] = ENCLAVE_TIMER_IRQ;
 
 timer_irq_out:
-  spinlock_unlock(&enclave_metadata_lock);
+  release_enclave_metadata_lock();
   return retval;
 }
 
