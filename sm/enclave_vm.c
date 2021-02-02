@@ -2,6 +2,71 @@
 #include "mtrap.h"
 #include "enclave_vm.h"
 
+/**
+ * \brief internal functions of check_enclave_layout, it will recursively check the region
+ *
+ * \param page_table is an PT page (physical addr), it could be non-root PT page
+ * \param vaddr is the start virtual addr of the PTE in page_table
+ * \param level is the PT page level of page_table
+ */
+static int __check_enclave_layout(uintptr_t page_table, uintptr_t va_start, uintptr_t va_end, uintptr_t pa_start, uintptr_t pa_end, uintptr_t vaddr, int level)
+{
+  if(level < 0)
+  {
+    return -1;
+  }
+
+  uintptr_t* pte = (uintptr_t*)page_table;
+  uintptr_t region_size  = RISCV_PGSIZE * (1 << (level*RISCV_PGLEVEL_BITS));
+  for(int i=0; i < (RISCV_PGSIZE/sizeof(uintptr_t)); ++i)
+  {
+    uintptr_t addr0 = vaddr + i*region_size;
+    uintptr_t addr1 = addr0 + region_size;
+    if(addr1 <= va_start || addr0 >= va_end)
+    {
+      continue;
+    }
+
+    if(PTE_VALID(pte[i]))
+    {
+      if(PTE_ILLEGAL(pte[i]))
+      {
+        return -1;
+      }
+      addr0 = PTE_TO_PFN(pte[i]) << RISCV_PGSHIFT;
+      addr1 = addr0 + region_size;
+      if(IS_LEAF_PTE(pte[i]))
+      {
+        if(!(addr0 >= pa_start && addr1 <= pa_end))
+        {
+          // printm("here: addr0: %lx, addr1: 0x%lx, pa_start: 0x%lx, pa_end: 0x%lx\r\n", addr0, addr1, pa_start, pa_end);
+          return -1;
+        }
+      }
+      else if(__check_enclave_layout(PTE_TO_PFN(pte[i]) << RISCV_PGSHIFT, va_start, va_end,
+            pa_start, pa_end, addr0, level-1))
+      {
+        return -1;
+      }
+    }
+  }
+  return 0;
+}
+
+/**
+ * \brief check whether a VM region is mapped (only) to a PM region
+ *
+ * \param root_page_table is the root of the pgae table
+ * \param va_start is the start of the VM region
+ * \param va_end is the end of the VM region
+ * \param pa_start is the start of the PM region
+ * \param pa_end is the end of the PM region
+ */
+int check_enclave_layout(uintptr_t root_page_table, uintptr_t va_start, uintptr_t va_end, uintptr_t pa_start, uintptr_t pa_end)
+{
+  return __check_enclave_layout(root_page_table, va_start, va_end, pa_start, pa_end, 0, RISCV_PGLEVELS-1);
+}
+
 static void __traverse_vmas(uintptr_t page_table, struct vm_area_struct *vma_list, int *vma_num, uintptr_t *va_start, uintptr_t *va_end, uintptr_t vaddr, int level)
 {
   if(level < 0)

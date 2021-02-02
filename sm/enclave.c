@@ -413,13 +413,14 @@ uintptr_t create_enclave(struct enclave_sbi_param_t create_args)
   struct enclave_t* enclave = NULL;
   uintptr_t ret = 0;
 
-acquire_enclave_metadata_lock();
-
+  acquire_enclave_metadata_lock();
+  
   enclave = alloc_enclave();
   if(!enclave)
   {
-     printm("M mode: create_enclave: enclave allocation is failed \r\n");
-     return -1UL;
+    printm("M mode: create_enclave: enclave allocation is failed \r\n");
+    ret = ENCLAVE_NO_MEMORY;
+    goto failed;
   }
 
   //TODO: check whether enclave memory is out of bound
@@ -444,7 +445,7 @@ acquire_enclave_metadata_lock();
   enclave->top_caller_eid = -1;
   enclave->cur_callee_eid = -1;
 
-    //traverse vmas
+  //traverse vmas
   struct pm_area_struct* pma = (struct pm_area_struct*)(create_args.paddr);
   struct vm_area_struct* vma = (struct vm_area_struct*)(create_args.paddr + sizeof(struct pm_area_struct));
   pma->paddr = create_args.paddr;
@@ -454,8 +455,7 @@ acquire_enclave_metadata_lock();
      || pma->free_mem & ((1<<RISCV_PGSHIFT) - 1))
   {
     ret = ENCLAVE_ERROR;
-    printm("fail: ENCLAVE_ERROR");
-    return ret;
+    goto failed;
   }
   pma->pm_next = NULL;
   enclave->pma_list = pma;
@@ -502,15 +502,21 @@ acquire_enclave_metadata_lock();
   {
     ret = ENCLAVE_ERROR;
     printm("check kbuffer fail: ENCLAVE_ERROR");
-    return ret;
+    goto failed;
   }
   mmap((uintptr_t*)(enclave->root_page_table), &(enclave->free_pages), ENCLAVE_DEFAULT_KBUFFER, create_args.kbuffer, create_args.kbuffer_size);
-  
+  copy_word_to_host((unsigned int*)create_args.eid_ptr, enclave->eid);
   release_enclave_metadata_lock();
 
-  copy_word_to_host((unsigned int*)create_args.eid_ptr, enclave->eid);
-
   return 0;
+
+failed:
+  if(enclave)
+  {
+    free_enclave(enclave->eid);
+  }
+  release_enclave_metadata_lock();
+  return ret;
 }
 
 uintptr_t run_enclave(uintptr_t* regs, unsigned int eid)
@@ -524,12 +530,18 @@ uintptr_t run_enclave(uintptr_t* regs, unsigned int eid)
   if(!enclave)
   {
     printm("M mode: run_enclave: wrong enclave id\r\n");
-    return -1UL;
+    retval = -1UL;
+    goto run_enclave_out;
   }
-
   if(enclave->state != FRESH)
   {
     printm("M mode: run_enclave: enclave is not initialized or already used\r\n");
+    retval = -1UL;
+    goto run_enclave_out;
+  }
+  if(enclave->type == SERVER_ENCLAVE)
+  {
+    printm("M mode: run_enclave: server enclave is no need to run\r\n");
     retval = -1UL;
     goto run_enclave_out;
   }

@@ -42,6 +42,7 @@
 //#define ENCLAVE_DEFAULT_STACK_SIZE 1024*1024
 
 #define PTE_VALID(pte) (pte & PTE_V)
+#define PTE_ILLEGAL(pte) ((pte & PTE_V) && (pte & PTE_W) && !(pte & PTE_R))
 #define PTE_TO_PFN(pte) (pte >> PTE_PPN_SHIFT)
 #define IS_LEAF_PTE(pte) ((pte & PTE_V) && (pte & PTE_R || pte & PTE_X))
 #define RISCV_PGLEVELS ((VA_BITS - RISCV_PGSHIFT) / RISCV_PGLEVEL_BITS)
@@ -53,6 +54,7 @@ struct vm_area_struct* find_vma(struct vm_area_struct *vma_list, uintptr_t vaddr
 int insert_pma(struct pm_area_struct **pma_list, struct pm_area_struct *pma);
 int delete_pma(struct pm_area_struct **pma_list, struct pm_area_struct *pma);
 
+int check_enclave_layout(uintptr_t root_page_table, uintptr_t va_start, uintptr_t va_end, uintptr_t pa_start, uintptr_t pa_end);
 void* va_to_pa(uintptr_t* root_page_table, void* va);
 
 int mmap(uintptr_t* root_page_table, struct page_t **free_pages, uintptr_t vaddr, uintptr_t paddr, uintptr_t size);

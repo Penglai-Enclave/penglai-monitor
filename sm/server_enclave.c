@@ -146,6 +146,19 @@ uintptr_t create_server_enclave(struct enclave_sbi_param_t create_args)
 
   acquire_enclave_metadata_lock();
 
+  if((create_args.paddr & (RISCV_PGSIZE - 1)) || (create_args.size & (RISCV_PGSIZE - 1)) || create_args.size < RISCV_PGSIZE)
+  {
+    ret = ENCLAVE_ERROR;
+    goto failed;
+  }
+ printm("M mode: create_server_enclave: create_args.paddr: %d;  create_args.size: %d\r\n", create_args.paddr, create_args.size);
+  //check enclave memory layout
+  if(check_enclave_layout(create_args.paddr + RISCV_PGSIZE, 0, -1UL, create_args.paddr, create_args.paddr + create_args.size) != 0)
+  {
+    ret = ENCLAVE_ERROR;
+    goto failed;
+  }
+
   server_enclave = __alloc_server_enclave(create_args.name);
   if(server_enclave == (void*)(-1UL))
   {
@@ -159,8 +172,6 @@ uintptr_t create_server_enclave(struct enclave_sbi_param_t create_args)
     goto failed;
   }
 
-  uintptr_t* name1=(uintptr_t*)create_args.name;
-  uintptr_t* name2=(uintptr_t*)server_enclave->server_name;
   enclave = server_enclave->entity;
   enclave->entry_point = create_args.entry_point;
   enclave->ocall_func_id = create_args.ecall_arg0;
@@ -230,9 +241,9 @@ uintptr_t create_server_enclave(struct enclave_sbi_param_t create_args)
     free_mem -= RISCV_PGSIZE;
   }
 
-  release_enclave_metadata_lock();
   copy_word_to_host((unsigned int*)create_args.eid_ptr, enclave->eid);
-  return 0;
+  release_enclave_metadata_lock();
+  return ret;
 
 failed:
   release_enclave_metadata_lock();
@@ -271,15 +282,13 @@ uintptr_t acquire_server_enclave(uintptr_t *regs, char* server_name_u)
     goto failed;
   }
 
-//   server_name = va_to_pa((uintptr_t*)(enclave->root_page_table), server_name_u);
-  server_name = server_name_u;
+  server_name = va_to_pa((uintptr_t*)(enclave->root_page_table), server_name_u);
   if(!server_name)
   {
     ret = -1UL;
     goto failed;
   }
-
-  uintptr_t* name1=(uintptr_t*)server_name;
+  printm("server_enclave: after get server_name server_name is: %s\r\n", server_name);
 
   server_enclave = __get_server_enclave_by_name(server_name);
   if(!server_enclave)
@@ -288,8 +297,6 @@ uintptr_t acquire_server_enclave(uintptr_t *regs, char* server_name_u)
     goto failed;
   }
   ret = server_enclave->entity->eid;
-
-  uintptr_t* name2=(uintptr_t*)server_enclave->server_name;
 
   release_enclave_metadata_lock();
   printm("M MODE: acquire encalve success ret %d\r\n", ret);
