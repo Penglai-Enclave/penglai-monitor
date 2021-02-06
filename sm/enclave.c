@@ -440,6 +440,7 @@ uintptr_t create_enclave(struct enclave_sbi_param_t create_args)
   enclave->host_ptbr = read_csr(satp);
   enclave->root_page_table = create_args.paddr + RISCV_PGSIZE;
   enclave->thread_context.encl_ptbr = ((create_args.paddr + RISCV_PGSIZE) >> RISCV_PGSHIFT) | SATP_MODE_CHOICE;
+  enclave->type = NORMAL_ENCLAVE;
   enclave->state = FRESH;
   enclave->caller_eid = -1;
   enclave->top_caller_eid = -1;
@@ -508,7 +509,7 @@ uintptr_t create_enclave(struct enclave_sbi_param_t create_args)
   copy_word_to_host((unsigned int*)create_args.eid_ptr, enclave->eid);
   release_enclave_metadata_lock();
 
-  return 0;
+  return ret;
 
 failed:
   if(enclave)
@@ -872,9 +873,50 @@ timer_irq_out:
 
 uintptr_t call_enclave(uintptr_t* regs, unsigned int callee_eid, uintptr_t arg)
 {
-  uintptr_t ret = 0;
-  printm("M mode: call encalve success\r\n");
-  return ret;
+  printm("call_enclave start!!!\r\n");
+  struct enclave_t* top_caller_enclave = NULL;
+  struct enclave_t* caller_enclave = NULL;
+  struct enclave_t* callee_enclave = NULL;
+  struct vm_area_struct* vma = NULL;
+  struct pm_area_struct* pma = NULL;
+  uintptr_t retval = 0;
+  int caller_eid = get_curr_enclave_id();
+  if(check_in_enclave_world() < 0)
+    return -1;
+
+  acquire_enclave_metadata_lock();
+  caller_enclave = get_enclave(caller_eid);
+  if(!caller_enclave || caller_enclave->state != RUNNING || check_enclave_authentication(caller_enclave) != 0)
+  {
+    printm("M mode: call_enclave: enclave%d can not execute call_enclave!\r\n", caller_eid);
+    retval = -1UL;
+    goto out;
+  }
+
+  callee_enclave = get_enclave(callee_eid);
+  printm("M mode: call_enclave: caller_entry_point: %lx, callee_entry_point: %lx!\r\n", caller_enclave->entry_point, callee_enclave->entry_point);
+  if(!callee_enclave || callee_enclave->type != SERVER_ENCLAVE || callee_enclave->caller_eid != -1 || callee_enclave->state != RUNNABLE)
+  {
+    printm("M mode: call_enclave: enclave%d can not be accessed!\r\n", callee_eid);
+    retval = -1UL;
+    goto out;
+  }
+
+  //set return address to enclave
+  write_csr(mepc, (uintptr_t)(callee_enclave->entry_point)); 
+
+  //enable timer interrupt
+  set_csr(mie, MIP_MTIP);
+
+  //set default stack
+  regs[2] = ENCLAVE_DEFAULT_STACK_BASE;
+
+  callee_enclave->state = RUNNING;
+  //printm("calll_enclave: now we are entering server:%d, encl_ptbr:0x%lx\r\n", callee_enclave->eid, read_csr(satp));
+out:
+  release_enclave_metadata_lock();
+  printm("call_enclave over!\r\n");
+  return 0;
 }
 
 uintptr_t enclave_return(uintptr_t* regs, uintptr_t arg)

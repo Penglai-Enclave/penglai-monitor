@@ -151,8 +151,7 @@ uintptr_t create_server_enclave(struct enclave_sbi_param_t create_args)
     ret = ENCLAVE_ERROR;
     goto failed;
   }
- printm("M mode: create_server_enclave: create_args.paddr: %d;  create_args.size: %d\r\n", create_args.paddr, create_args.size);
-  //check enclave memory layout
+   //check enclave memory layout
   if(check_enclave_layout(create_args.paddr + RISCV_PGSIZE, 0, -1UL, create_args.paddr, create_args.paddr + create_args.size) != 0)
   {
     ret = ENCLAVE_ERROR;
@@ -173,7 +172,10 @@ uintptr_t create_server_enclave(struct enclave_sbi_param_t create_args)
   }
 
   enclave = server_enclave->entity;
+  enclave->paddr = create_args.paddr;
+  enclave->size = create_args.size;
   enclave->entry_point = create_args.entry_point;
+  enclave->free_mem = create_args.free_mem;
   enclave->ocall_func_id = create_args.ecall_arg0;
   enclave->ocall_arg0 = create_args.ecall_arg1;
   enclave->ocall_arg1 = create_args.ecall_arg2;
