@@ -105,17 +105,24 @@ struct link_mem_t* init_mem_link(unsigned long mem_size, unsigned long slab_size
 {
   int retval = 0;
   struct link_mem_t* head;
+  unsigned long resp_size = 0;
 
-  head = (struct link_mem_t*)mm_alloc(mem_size, NULL);
+  head = (struct link_mem_t*)mm_alloc(mem_size, &resp_size);
   
   if(head == NULL)
     return NULL;
   else
-    memset((void*)head, 0, mem_size);
+    memset((void*)head, 0, resp_size);
 
-  head->mem_size = mem_size;
+  if(resp_size <= sizeof(struct link_mem_t) + slab_size)
+  {
+    mm_free(head, resp_size);
+    return NULL;
+  }
+
+  head->mem_size = resp_size;
   head->slab_size = slab_size;
-  head->slab_num = (mem_size - sizeof(struct link_mem_t)) / slab_size;
+  head->slab_num = (resp_size - sizeof(struct link_mem_t)) / slab_size;
   void* align_addr = (char*)head + sizeof(struct link_mem_t);
   head->addr = (char*)size_up_align((unsigned long)align_addr, slab_size);
   head->next_link_mem = NULL;
@@ -127,21 +134,29 @@ struct link_mem_t* add_link_mem(struct link_mem_t** tail)
 {
   struct link_mem_t* new_link_mem;
   int retval = 0;
+  unsigned long resp_size = 0;
 
-  new_link_mem = (struct link_mem_t*)mm_alloc((*tail)->mem_size, NULL);
+  new_link_mem = (struct link_mem_t*)mm_alloc((*tail)->mem_size, &resp_size);
 
   if (new_link_mem == NULL)
     return NULL;
   else
-    memset((void*)new_link_mem, 0, (*tail)->mem_size);
+    memset((void*)new_link_mem, 0, resp_size);
+
+  if(resp_size <= sizeof(struct link_mem_t) + (*tail)->slab_size)
+  {
+    mm_free(new_link_mem, resp_size);
+  }
 
   (*tail)->next_link_mem = new_link_mem;
-  new_link_mem->mem_size = (*tail)->mem_size;
-  new_link_mem->slab_num = (*tail)->slab_num;
+  new_link_mem->mem_size = resp_size;
+  new_link_mem->slab_num = (resp_size - sizeof(struct link_mem_t)) / (*tail)->slab_size;
   new_link_mem->slab_size = (*tail)->slab_size;
   void* align_addr = (char*)new_link_mem + sizeof(struct link_mem_t);
   new_link_mem->addr = (char*)size_up_align((unsigned long)align_addr, (*tail)->slab_size);
   new_link_mem->next_link_mem = NULL;
+  
+  *tail = new_link_mem;
 
   return new_link_mem;
 }
@@ -408,6 +423,54 @@ int swap_from_enclave_to_host(uintptr_t* regs, struct enclave_t* enclave)
   return 0;
 }
 
+static int __enclave_call(uintptr_t* regs, struct enclave_t* top_caller_enclave, struct enclave_t* caller_enclave, struct enclave_t* callee_enclave)
+{
+  //move caller's host context to callee's host context
+  uintptr_t encl_ptbr = callee_enclave->thread_context.encl_ptbr;
+  memcpy((void*)(&(callee_enclave->thread_context)), (void*)(&(caller_enclave->thread_context)), sizeof(struct thread_state_t));
+  callee_enclave->thread_context.encl_ptbr = encl_ptbr;
+  callee_enclave->host_ptbr = caller_enclave->host_ptbr;
+  callee_enclave->ocall_func_id = caller_enclave->ocall_func_id;
+  callee_enclave->ocall_arg0 = caller_enclave->ocall_arg0;
+  callee_enclave->ocall_arg1 = caller_enclave->ocall_arg1;
+  callee_enclave->ocall_syscall_num = caller_enclave->ocall_syscall_num; 
+
+  //save caller's enclave context on its prev_state
+  swap_prev_state(&(caller_enclave->thread_context), regs);
+  caller_enclave->thread_context.prev_stvec = read_csr(stvec);
+  caller_enclave->thread_context.prev_mie = read_csr(mie);
+  caller_enclave->thread_context.prev_mideleg = read_csr(mideleg);
+  caller_enclave->thread_context.prev_medeleg = read_csr(medeleg);
+  caller_enclave->thread_context.prev_mepc = read_csr(mepc);
+
+  //clear callee's enclave context
+  memset((void*)regs, 0, sizeof(struct general_registers_t));
+
+  //different platforms have differnt ptbr switch methods
+  switch_to_enclave_ptbr(&(callee_enclave->thread_context), callee_enclave->thread_context.encl_ptbr);
+
+  //callee use caller's mie/mip
+  clear_csr(mip, MIP_MTIP);
+  clear_csr(mip, MIP_STIP);
+  clear_csr(mip, MIP_SSIP);
+  clear_csr(mip, MIP_SEIP);
+
+  //transfer control to the callee enclave
+  write_csr(mepc, callee_enclave->entry_point);
+
+  //mark that cpu is in callee enclave world now
+  enter_enclave_world(callee_enclave->eid);
+
+  top_caller_enclave->cur_callee_eid = callee_enclave->eid;
+  caller_enclave->cur_callee_eid = callee_enclave->eid;
+  callee_enclave->caller_eid = caller_enclave->eid;
+  callee_enclave->top_caller_eid = top_caller_enclave->eid;
+
+  __asm__ __volatile__ ("sfence.vma" : : : "memory");
+
+  return 0;
+}
+
 uintptr_t create_enclave(struct enclave_sbi_param_t create_args)
 {
   struct enclave_t* enclave = NULL;
@@ -652,7 +715,7 @@ uintptr_t resume_enclave(uintptr_t* regs, unsigned int eid)
 
   acquire_enclave_metadata_lock();
 
-  struct enclave_t* enclave = get_enclave(eid);
+  struct enclave_t* enclave = __get_real_enclave(eid);
   if(!enclave)
   {
     printm("M mode: resume_enclave: wrong enclave id%d\r\n", eid);
@@ -873,7 +936,7 @@ timer_irq_out:
 
 uintptr_t call_enclave(uintptr_t* regs, unsigned int callee_eid, uintptr_t arg)
 {
-  printm("call_enclave start!!!\r\n");
+  printm("call_enclave start!\r\n");
   struct enclave_t* top_caller_enclave = NULL;
   struct enclave_t* caller_enclave = NULL;
   struct enclave_t* callee_enclave = NULL;
@@ -892,12 +955,28 @@ uintptr_t call_enclave(uintptr_t* regs, unsigned int callee_eid, uintptr_t arg)
     retval = -1UL;
     goto out;
   }
+  if(caller_enclave->caller_eid != -1)
+    top_caller_enclave = get_enclave(caller_enclave->top_caller_eid); // 找到最开始的caller_enclave
+  else
+    top_caller_enclave = caller_enclave;
+  if(!top_caller_enclave || top_caller_enclave->state != RUNNING)
+  {
+    printm("M mode: call_enclave: enclave%d can not execute call_enclave!\r\n", caller_eid);
+    retval = -1UL;
+    goto out;
+  }
 
   callee_enclave = get_enclave(callee_eid);
-  printm("M mode: call_enclave: caller_entry_point: %lx, callee_entry_point: %lx!\r\n", caller_enclave->entry_point, callee_enclave->entry_point);
   if(!callee_enclave || callee_enclave->type != SERVER_ENCLAVE || callee_enclave->caller_eid != -1 || callee_enclave->state != RUNNABLE)
   {
     printm("M mode: call_enclave: enclave%d can not be accessed!\r\n", callee_eid);
+    retval = -1UL;
+    goto out;
+  }
+
+  if(__enclave_call(regs, top_caller_enclave, caller_enclave, callee_enclave) < 0)
+  {
+    printm("M mode: call_enclave: enclave can not be run\r\n");
     retval = -1UL;
     goto out;
   }
@@ -911,12 +990,14 @@ uintptr_t call_enclave(uintptr_t* regs, unsigned int callee_eid, uintptr_t arg)
   //set default stack
   regs[2] = ENCLAVE_DEFAULT_STACK_BASE;
 
+  //map kbuffer
+  mmap((uintptr_t*)(callee_enclave->root_page_table), &(callee_enclave->free_pages), ENCLAVE_DEFAULT_KBUFFER, top_caller_enclave->kbuffer, top_caller_enclave->kbuffer_size);
   callee_enclave->state = RUNNING;
-  //printm("calll_enclave: now we are entering server:%d, encl_ptbr:0x%lx\r\n", callee_enclave->eid, read_csr(satp));
+
 out:
   release_enclave_metadata_lock();
   printm("call_enclave over!\r\n");
-  return 0;
+  return retval;
 }
 
 uintptr_t enclave_return(uintptr_t* regs, uintptr_t arg)
