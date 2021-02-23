@@ -471,6 +471,49 @@ static int __enclave_call(uintptr_t* regs, struct enclave_t* top_caller_enclave,
   return 0;
 }
 
+static int __enclave_return(uintptr_t* regs, struct enclave_t* callee_enclave, struct enclave_t* caller_enclave, struct enclave_t* top_caller_enclave)
+{
+  //restore caller's context
+  memcpy((void*)regs, (void*)(&(caller_enclave->thread_context.prev_state)), sizeof(struct general_registers_t));
+  swap_prev_stvec(&(caller_enclave->thread_context), callee_enclave->thread_context.prev_stvec);
+  swap_prev_mie(&(caller_enclave->thread_context), callee_enclave->thread_context.prev_mie);
+  swap_prev_mideleg(&(caller_enclave->thread_context), callee_enclave->thread_context.prev_mideleg);
+  swap_prev_medeleg(&(caller_enclave->thread_context), callee_enclave->thread_context.prev_medeleg);
+  swap_prev_mepc(&(caller_enclave->thread_context), callee_enclave->thread_context.prev_mepc);
+
+  //restore caller's host context
+  memcpy((void*)(&(caller_enclave->thread_context.prev_state)), (void*)(&(callee_enclave->thread_context.prev_state)), sizeof(struct general_registers_t));
+
+  //clear callee's enclave context
+  uintptr_t encl_ptbr = callee_enclave->thread_context.encl_ptbr;
+  memset((void*)(&(callee_enclave->thread_context)), 0, sizeof(struct thread_state_t));
+  callee_enclave->thread_context.encl_ptbr = encl_ptbr;
+  callee_enclave->host_ptbr = 0;
+  callee_enclave->ocall_func_id = NULL;
+  callee_enclave->ocall_arg0 = NULL;
+  callee_enclave->ocall_arg1 = NULL;
+  callee_enclave->ocall_syscall_num = NULL;
+
+  //different platforms have differnt ptbr switch methods
+  switch_to_enclave_ptbr(&(caller_enclave->thread_context), caller_enclave->thread_context.encl_ptbr);
+
+  clear_csr(mip, MIP_MTIP);
+  clear_csr(mip, MIP_STIP);
+  clear_csr(mip, MIP_SSIP);
+  clear_csr(mip, MIP_SEIP);
+
+  //mark that cpu is in caller enclave world now
+  enter_enclave_world(caller_enclave->eid);
+  top_caller_enclave->cur_callee_eid = caller_enclave->eid;
+  caller_enclave->cur_callee_eid = -1;
+  callee_enclave->caller_eid = -1;
+  callee_enclave->top_caller_eid = -1;
+
+  __asm__ __volatile__ ("sfence.vma" : : : "memory");
+
+  return 0;
+}
+
 uintptr_t create_enclave(struct enclave_sbi_param_t create_args)
 {
   struct enclave_t* enclave = NULL;
@@ -766,6 +809,36 @@ resume_enclave_out:
   return retval;
 }
 
+uintptr_t mmap_after_resume(struct enclave_t *enclave, uintptr_t paddr, uintptr_t size)
+{
+    uintptr_t retval = 0;
+    uintptr_t vaddr = enclave->thread_context.prev_state.a1;
+    if(!vaddr) 
+    {
+      vaddr = ENCLAVE_DEFAULT_MMAP_BASE - (size - RISCV_PGSIZE);
+    } 
+    struct pm_area_struct *pma = (struct pm_area_struct*)paddr;
+    struct vm_area_struct *vma = (struct vm_area_struct*)(paddr + sizeof(struct pm_area_struct));
+    pma->paddr = paddr;
+    pma->size = size;
+    pma->pm_next = NULL;
+    vma->va_start = vaddr;
+    vma->va_end = vaddr + size - RISCV_PGSIZE;
+    vma->vm_next = NULL;
+    vma->pma = pma;
+    if(insert_vma(&(enclave->mmap_vma), vma, ENCLAVE_DEFAULT_MMAP_BASE) < 0)
+    {
+        vma->va_end = enclave->mmap_vma->va_start;
+        vma->va_start = vma->va_end - (size - RISCV_PGSIZE);
+        vma->vm_next = enclave->mmap_vma;
+        enclave->mmap_vma = vma;
+    }
+    insert_pma(&(enclave->pma_list), pma);
+    mmap((uintptr_t*)(enclave->root_page_table), &(enclave->free_pages), vma->va_start, paddr + RISCV_PGSIZE, size - RISCV_PGSIZE);
+    retval = vma->va_start;
+    return retval;
+}
+
 //host use this fucntion to re-enter enclave world
 uintptr_t resume_from_ocall(uintptr_t* regs, unsigned int eid)
 {
@@ -785,11 +858,11 @@ uintptr_t resume_from_ocall(uintptr_t* regs, unsigned int eid)
   switch(ocall_func_id)
   {
     case OCALL_MMAP:
-      //TODO
-      retval = 0;
+      retval = mmap_after_resume(enclave, regs[13], regs[14]);
+      if(retval == -1UL)
+        goto out;
       break;
     case OCALL_UNMAP:
-      //TODO
       retval = 0;
       break;
     case OCALL_SYS_WRITE:
@@ -861,14 +934,79 @@ uintptr_t exit_enclave(uintptr_t* regs, unsigned long retval)
 uintptr_t enclave_mmap(uintptr_t* regs, uintptr_t vaddr, uintptr_t size)
 {
   uintptr_t ret = 0;
-  //TODO
+  int eid = get_curr_enclave_id();
+  struct enclave_t* enclave = NULL;
+  if(check_in_enclave_world() < 0)
+    return -1;
+  if(vaddr)
+  {
+    if(vaddr & (RISCV_PGSIZE - 1) || size < RISCV_PGSIZE || size & (RISCV_PGSIZE - 1))
+      return -1;
+  }
+
+  acquire_enclave_metadata_lock();
+
+  enclave = get_enclave(eid);
+  if(!enclave || check_enclave_authentication(enclave) != 0 || enclave->state != RUNNING)
+  {
+    ret = -1UL;
+    goto out;
+  }
+
+  copy_dword_to_host((uintptr_t*)enclave->ocall_func_id, OCALL_MMAP);
+  copy_dword_to_host((uintptr_t*)enclave->ocall_arg1, size + RISCV_PGSIZE);
+
+  swap_from_enclave_to_host(regs, enclave);
+  enclave->state = OCALLING;
+  ret = ENCLAVE_OCALL;
+
+out:
+  release_enclave_metadata_lock();
   return ret;
 }
 
 uintptr_t enclave_unmap(uintptr_t* regs, uintptr_t vaddr, uintptr_t size)
 {
   uintptr_t ret = 0;
-  //TODO
+  int eid = get_curr_enclave_id();
+  struct enclave_t* enclave = NULL;
+  struct vm_area_struct *vma = NULL;
+  struct pm_area_struct *pma = NULL;
+  if(check_in_enclave_world() < 0)
+    return -1;
+
+  acquire_enclave_metadata_lock();
+
+  enclave = get_enclave(eid);
+  if(!enclave || check_enclave_authentication(enclave) != 0 || enclave->state != RUNNING)
+  {
+    ret = -1UL;
+    goto out;
+  }
+
+  vma = find_vma(enclave->mmap_vma, vaddr, size);
+  if(!vma)
+  {
+    ret = -1UL;
+    goto out;
+  }
+  pma = vma->pma;
+  delete_vma(&(enclave->mmap_vma), vma);
+  delete_pma(&(enclave->pma_list), pma);
+  vma->vm_next = NULL;
+  pma->pm_next = NULL;
+  unmap((uintptr_t*)(enclave->root_page_table), vma->va_start, vma->va_end - vma->va_start);
+
+  copy_dword_to_host((uintptr_t*)enclave->ocall_func_id, OCALL_UNMAP);
+  copy_dword_to_host((uintptr_t*)enclave->ocall_arg0, pma->paddr);
+  copy_dword_to_host((uintptr_t*)enclave->ocall_arg1, pma->size);
+
+  swap_from_enclave_to_host(regs, enclave);
+  enclave->state = OCALLING;
+  ret = ENCLAVE_OCALL;
+
+out:
+  release_enclave_metadata_lock();
   return ret;
 }
 
@@ -956,7 +1094,7 @@ uintptr_t call_enclave(uintptr_t* regs, unsigned int callee_eid, uintptr_t arg)
     goto out;
   }
   if(caller_enclave->caller_eid != -1)
-    top_caller_enclave = get_enclave(caller_enclave->top_caller_eid); // 找到最开始的caller_enclave
+    top_caller_enclave = get_enclave(caller_enclave->top_caller_eid);
   else
     top_caller_enclave = caller_enclave;
   if(!top_caller_enclave || top_caller_enclave->state != RUNNING)
@@ -972,6 +1110,45 @@ uintptr_t call_enclave(uintptr_t* regs, unsigned int callee_eid, uintptr_t arg)
     printm("M mode: call_enclave: enclave%d can not be accessed!\r\n", callee_eid);
     retval = -1UL;
     goto out;
+  }
+
+  struct call_enclave_arg_t call_arg;
+  struct call_enclave_arg_t* call_arg0 = va_to_pa((uintptr_t*)(caller_enclave->root_page_table), (void*)arg);
+  if(!call_arg0)
+  {
+    retval = -1UL;
+    goto out;
+  }
+
+  copy_from_host(&call_arg, call_arg0, sizeof(struct call_enclave_arg_t));
+  if(call_arg.req_vaddr != 0)
+  {
+    if(call_arg.req_vaddr & (RISCV_PGSIZE - 1) || call_arg.req_size < RISCV_PGSIZE || call_arg.req_size & (RISCV_PGSIZE - 1))
+    {
+      retval = -1UL;
+      goto out;
+    }
+    vma = find_vma(caller_enclave->mmap_vma, call_arg.req_vaddr, call_arg.req_size);
+    if(!vma)
+    {
+      retval = -1UL;
+      goto out;
+    }
+    pma = vma->pma;
+    delete_vma(&(caller_enclave->mmap_vma), vma);
+    delete_pma(&(caller_enclave->pma_list), pma);
+    vma->vm_next = NULL;
+    pma->pm_next = NULL;
+    unmap((uintptr_t*)(caller_enclave->root_page_table), vma->va_start, vma->va_end - vma->va_start);
+    if(insert_vma(&(callee_enclave->mmap_vma), vma, ENCLAVE_DEFAULT_MMAP_BASE) < 0)
+    {
+      vma->va_end = callee_enclave->mmap_vma->va_start;
+      vma->va_start = vma->va_end - (pma->size - RISCV_PGSIZE);
+      vma->vm_next = callee_enclave->mmap_vma;
+      callee_enclave->mmap_vma = vma;
+    }
+    insert_pma(&(callee_enclave->pma_list), pma);
+    mmap((uintptr_t*)(callee_enclave->root_page_table), &(callee_enclave->free_pages), vma->va_start, pma->paddr + RISCV_PGSIZE, pma->size - RISCV_PGSIZE);
   }
 
   if(__enclave_call(regs, top_caller_enclave, caller_enclave, callee_enclave) < 0)
@@ -992,6 +1169,16 @@ uintptr_t call_enclave(uintptr_t* regs, unsigned int callee_eid, uintptr_t arg)
 
   //map kbuffer
   mmap((uintptr_t*)(callee_enclave->root_page_table), &(callee_enclave->free_pages), ENCLAVE_DEFAULT_KBUFFER, top_caller_enclave->kbuffer, top_caller_enclave->kbuffer_size);
+  
+  //pass parameters
+  regs[10] = call_arg.req_arg;
+  if(call_arg.req_vaddr)
+    regs[11] = vma->va_start;
+  else
+    regs[11] = 0;
+  regs[12] = call_arg.req_size;
+  retval = call_arg.req_arg;
+  
   callee_enclave->state = RUNNING;
 
 out:
@@ -1002,7 +1189,121 @@ out:
 
 uintptr_t enclave_return(uintptr_t* regs, uintptr_t arg)
 {
-    uintptr_t ret = 0;
-    printm("M mode: return encalve success\r\n");
-    return ret;
+  printm("enclave_return start!\r\n");
+  struct enclave_t *enclave = NULL;
+  struct enclave_t *caller_enclave = NULL;
+  struct enclave_t *top_caller_enclave = NULL;
+  int eid = 0;
+  uintptr_t ret = 0;
+  struct vm_area_struct *vma = NULL;
+  struct pm_area_struct *pma = NULL;
+
+  if(check_in_enclave_world() < 0)
+  {
+    printm("M mode: enclave_return: cpu is not in enclave world now\r\n");
+    return -1UL;
+  }
+
+  acquire_enclave_metadata_lock();
+
+  eid = get_curr_enclave_id();
+  enclave = get_enclave(eid);
+  if(!enclave || check_enclave_authentication(enclave) != 0 || enclave->type != SERVER_ENCLAVE)
+  {
+    printm("M mode: enclave_return: enclave%d can not return!\r\n", eid);
+    ret = -1UL;
+    goto out;
+  }
+  struct call_enclave_arg_t ret_arg;
+  struct call_enclave_arg_t* ret_arg0 = va_to_pa((uintptr_t*)(enclave->root_page_table), (void*)arg);
+  if(!ret_arg0)
+  {
+    ret = -1UL;
+    goto out;
+  }
+  copy_from_host(&ret_arg, ret_arg0, sizeof(struct call_enclave_arg_t));
+
+  caller_enclave = get_enclave(enclave->caller_eid);
+  top_caller_enclave = get_enclave(enclave->top_caller_eid);
+  __enclave_return(regs, enclave, caller_enclave, top_caller_enclave);
+  unmap((uintptr_t*)(enclave->root_page_table), ENCLAVE_DEFAULT_KBUFFER, top_caller_enclave->kbuffer_size);
+
+  //there is no need to check call_arg's validity again as it is already checked when executing call_enclave()
+  struct call_enclave_arg_t *call_arg = va_to_pa((uintptr_t*)(caller_enclave->root_page_table), (void*)(regs[11]));
+
+restore_req_addr:
+  if(!call_arg->req_vaddr || !ret_arg.req_vaddr || ret_arg.req_vaddr & (RISCV_PGSIZE - 1)
+      || ret_arg.req_size < call_arg->req_size || ret_arg.req_size & (RISCV_PGSIZE - 1))
+  {
+    call_arg->req_vaddr = 0;
+    goto restore_resp_addr;
+  }
+  vma = find_vma(enclave->mmap_vma, ret_arg.req_vaddr, ret_arg.req_size);
+  if(!vma)
+  {
+    call_arg->req_vaddr = 0;
+    goto restore_resp_addr;
+  }
+  pma = vma->pma;
+  delete_vma(&(enclave->mmap_vma), vma);
+  delete_pma(&(enclave->pma_list), pma);
+  unmap((uintptr_t*)(enclave->root_page_table), vma->va_start, vma->va_end - vma->va_start);
+  vma->va_start = call_arg->req_vaddr;
+  vma->va_end = vma->va_start + pma->size - RISCV_PGSIZE;
+  vma->vm_next = NULL;
+  pma->pm_next = NULL;
+  if(insert_vma(&(caller_enclave->mmap_vma), vma, ENCLAVE_DEFAULT_MMAP_BASE) < 0)
+  {
+    vma->va_end = caller_enclave->mmap_vma->va_start;
+    vma->va_start = vma->va_end - (pma->size - RISCV_PGSIZE);
+    vma->vm_next = caller_enclave->mmap_vma;
+    caller_enclave->mmap_vma = vma;
+  }
+  insert_pma(&(caller_enclave->pma_list), pma);
+  mmap((uintptr_t*)(caller_enclave->root_page_table), &(caller_enclave->free_pages), vma->va_start, pma->paddr + RISCV_PGSIZE, pma->size - RISCV_PGSIZE);
+  call_arg->req_vaddr = vma->va_start;
+
+restore_resp_addr:
+  if(!ret_arg.resp_vaddr || ret_arg.resp_vaddr & (RISCV_PGSIZE - 1)
+      || ret_arg.resp_size < RISCV_PGSIZE || ret_arg.resp_size & (RISCV_PGSIZE - 1))
+  {
+    call_arg->resp_vaddr = 0;
+    call_arg->resp_size = 0;
+    goto restore_return_val;
+  }
+
+  vma = find_vma(enclave->mmap_vma, ret_arg.resp_vaddr, ret_arg.resp_size);
+  if(!vma)
+  {
+    call_arg->resp_vaddr = 0;
+    call_arg->resp_size = 0;
+    goto restore_return_val;
+  }
+
+  pma = vma->pma;
+  delete_vma(&(enclave->mmap_vma), vma);
+  delete_pma(&(enclave->pma_list), pma);
+  unmap((uintptr_t*)(enclave->root_page_table), vma->va_start, vma->va_end - vma->va_start);
+  vma->vm_next = NULL;
+  pma->pm_next = NULL;
+  if(caller_enclave->mmap_vma)
+    vma->va_end = caller_enclave->mmap_vma->va_start;
+  else
+    vma->va_end = ENCLAVE_DEFAULT_MMAP_BASE;
+  vma->va_start = vma->va_end - (pma->size - RISCV_PGSIZE); 
+  vma->vm_next = caller_enclave->mmap_vma;
+  caller_enclave->mmap_vma = vma;
+  insert_pma(&(caller_enclave->pma_list), pma);
+  mmap((uintptr_t*)(caller_enclave->root_page_table), &(caller_enclave->free_pages), vma->va_start, pma->paddr + RISCV_PGSIZE, pma->size - RISCV_PGSIZE);
+  call_arg->resp_vaddr = vma->va_start;
+  call_arg->resp_size = ret_arg.resp_size;
+
+restore_return_val:
+  call_arg->resp_val = ret_arg.resp_val;
+  enclave->state = RUNNABLE;
+  ret = 0;
+out:
+  release_enclave_metadata_lock();
+  printm("enclave_return over!\r\n");
+  return ret;
 }
