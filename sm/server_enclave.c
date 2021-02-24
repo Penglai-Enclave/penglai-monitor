@@ -151,7 +151,7 @@ uintptr_t create_server_enclave(struct enclave_sbi_param_t create_args)
     ret = ENCLAVE_ERROR;
     goto failed;
   }
-   //check enclave memory layout
+
   if(check_enclave_layout(create_args.paddr + RISCV_PGSIZE, 0, -1UL, create_args.paddr, create_args.paddr + create_args.size) != 0)
   {
     ret = ENCLAVE_ERROR;
@@ -207,7 +207,6 @@ uintptr_t create_server_enclave(struct enclave_sbi_param_t create_args)
   enclave->pma_list = pma;
   traverse_vmas(enclave->root_page_table, vma);
 
-  //FIXME: here we assume there are exactly text(include text/data/bss) vma and stack vma
   while(vma)
   {
     if(vma->va_start == ENCLAVE_DEFAULT_TEXT_BASE)
