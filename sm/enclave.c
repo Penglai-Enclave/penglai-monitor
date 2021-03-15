@@ -672,7 +672,7 @@ uintptr_t run_enclave(uintptr_t* regs, unsigned int eid)
   set_csr(mie, MIP_MTIP);
 
   //set default stack
-  regs[2] = ENCLAVE_DEFAULT_STACK;
+  regs[2] = ENCLAVE_DEFAULT_STACK_BASE;
 
   //pass parameters
   regs[11] = (uintptr_t)enclave->entry_point;
