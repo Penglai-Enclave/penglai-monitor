@@ -196,10 +196,25 @@ send_ipi:
       retval = 0;//sm_destroy_enclave(regs, arg0,arg1);
       break;
     case SBI_ENCLAVE_OCALL:
-      retval = 0;//sm_enclave_ocall(regs, arg0);
+      retval = sm_enclave_ocall(regs, arg0, arg1, arg2);
       break;
     case SBI_EXIT_ENCLAVE:
       retval = sm_exit_enclave(regs, arg0);
+      break;
+    case SBI_CREATE_SERVER_ENCLAVE:
+      retval = sm_create_server_enclave(arg0);
+      break;
+    case SBI_DESTROY_SERVER_ENCLAVE:
+      retval = sm_destroy_server_enclave(regs, arg0);
+      break;
+    case SBI_ACQUIRE_SERVER:
+      retval = sm_server_enclave_acquire(regs, arg0);
+      break;
+    case SBI_CALL_ENCLAVE:
+      retval = sm_call_enclave(regs, arg0, arg1);
+      break;
+    case SBI_ENCLAVE_RETURN:
+      retval = sm_enclave_return(regs, arg0);
       break;
     //TODO: delete this SBI_CALL
     case SBI_DEBUG_PRINT:

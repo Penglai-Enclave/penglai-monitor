@@ -3,6 +3,7 @@
 #include "pmp.h"
 #include "enclave.h"
 #include "math.h"
+#include "server_enclave.h"
 
 static int sm_initialized = 0;
 static spinlock_t sm_init_lock = SPINLOCK_INIT;
@@ -122,7 +123,6 @@ uintptr_t sm_resume_enclave(uintptr_t* regs, unsigned long eid)
 {
   uintptr_t retval = 0;
   uintptr_t resume_func_id = regs[11];
-
   switch(resume_func_id)
   {
     case RESUME_FROM_TIMER_IRQ:
@@ -135,6 +135,9 @@ uintptr_t sm_resume_enclave(uintptr_t* regs, unsigned long eid)
     case RESUME_FROM_STOP:
       //printm("resume from stop\r\n");
       retval = resume_from_stop(regs, eid);
+      break;
+    case RESUME_FROM_OCALL:
+      retval = resume_from_ocall(regs, eid);
       break;
     default:
       break;
@@ -152,11 +155,84 @@ uintptr_t sm_exit_enclave(uintptr_t* regs, unsigned long retval)
   return ret;
 }
 
+uintptr_t sm_enclave_ocall(uintptr_t* regs, uintptr_t ocall_id, uintptr_t arg0, uintptr_t arg1)
+{
+  // printm("into sm_enclave_ocall: %d\r\n", ocall_id);
+  uintptr_t ret = 0;
+  switch(ocall_id)
+  {
+    case OCALL_MMAP:
+      ret = enclave_mmap(regs, arg0, arg1);
+      break;
+    case OCALL_UNMAP:
+      ret = enclave_unmap(regs, arg0, arg1);
+      break;
+    case OCALL_SYS_WRITE:
+      ret = enclave_sys_write(regs);
+      break;
+    default:
+      ret = -1UL;
+      break;
+    }
+    return ret;
+}
+
 uintptr_t sm_do_timer_irq(uintptr_t *regs, uintptr_t mcause, uintptr_t mepc)
 {
   uintptr_t ret;
 
   ret = do_timer_irq(regs, mcause, mepc);
+
+  return ret;
+}
+
+uintptr_t sm_server_enclave_acquire(uintptr_t *regs, uintptr_t server_name)
+{
+  uintptr_t ret = 0;
+
+  ret = acquire_server_enclave(regs, (char*)server_name);
+
+  return ret;
+}
+
+uintptr_t sm_call_enclave(uintptr_t* regs, uintptr_t eid, uintptr_t arg)
+{
+  uintptr_t retval = 0;
+
+  retval = call_enclave(regs, (unsigned int)eid, arg);
+
+  return retval;
+}
+
+uintptr_t sm_enclave_return(uintptr_t* regs, uintptr_t arg)
+{
+  uintptr_t ret = 0;
+
+  ret = enclave_return(regs, arg);
+
+  return ret;
+}
+
+uintptr_t sm_create_server_enclave(uintptr_t enclave_sbi_param)
+{
+  struct enclave_sbi_param_t enclave_sbi_param_local;
+  uintptr_t retval = 0;
+  retval = copy_from_host(&enclave_sbi_param_local,
+      (struct enclave_sbi_param_t*)enclave_sbi_param,
+      sizeof(struct enclave_sbi_param_t));
+  if(retval != 0)
+    return ENCLAVE_ERROR;
+
+  retval = create_server_enclave(enclave_sbi_param_local);
+
+  return retval;
+}
+
+uintptr_t sm_destroy_server_enclave(uintptr_t *regs, uintptr_t enclave_id)
+{
+  uintptr_t ret = 0;
+
+  ret = destroy_server_enclave(regs, enclave_id);
 
   return ret;
 }
